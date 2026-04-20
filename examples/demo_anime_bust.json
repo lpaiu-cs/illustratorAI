@@ -1,0 +1,265 @@
+{
+  "meta": {
+    "schema_version": "0.1.0",
+    "title": "Anime bust demo",
+    "generator": "native-illustration-compiler-v0"
+  },
+  "document": {
+    "width": 512,
+    "height": 512,
+    "dpi": 144,
+    "color_model": "RGBA",
+    "color_depth": "U8",
+    "background_color": "#FFF7F4FF",
+    "file_name": "demo_anime_bust"
+  },
+  "resources": [
+    {
+      "id": "sparkle_svg",
+      "kind": "svg",
+      "path": "assets/sparkle.svg"
+    },
+    {
+      "id": "eye_highlight_png",
+      "kind": "png",
+      "path": "assets/eye_highlight.png"
+    }
+  ],
+  "layers": [
+    {
+      "id": "background",
+      "name": "background",
+      "type": "paint",
+      "ops": [
+        {
+          "type": "fill_solid",
+          "color": "#FFF7F4FF"
+        }
+      ]
+    },
+    {
+      "id": "character",
+      "name": "character",
+      "type": "group",
+      "masks": [
+        {
+          "id": "character_selection",
+          "name": "character_selection",
+          "type": "selection_mask",
+          "selection": {
+            "rectangles": [
+              {
+                "x": 112,
+                "y": 64,
+                "width": 288,
+                "height": 384,
+                "value": 255
+              }
+            ]
+          }
+        }
+      ],
+      "children": [
+        {
+          "id": "sketch",
+          "name": "sketch",
+          "type": "paint",
+          "opacity": 0.3,
+          "ops": [
+            {
+              "type": "brush_path",
+              "points": [[173, 120], [256, 88], [338, 125], [320, 204], [256, 222], [190, 202], [173, 120]],
+              "color": "#A78B80FF",
+              "size": 6.0
+            },
+            {
+              "type": "brush_path",
+              "points": [[206, 250], [256, 276], [314, 250]],
+              "color": "#A78B80FF",
+              "size": 8.0
+            }
+          ]
+        },
+        {
+          "id": "lineart",
+          "name": "lineart",
+          "type": "paint",
+          "ops": [
+            {
+              "type": "brush_line",
+              "from": [180, 122],
+              "to": [332, 122],
+              "color": "#33252BFF",
+              "size": 4.0
+            },
+            {
+              "type": "brush_path",
+              "points": [[188, 196], [214, 224], [256, 232], [300, 224], [325, 196]],
+              "color": "#33252BFF",
+              "size": 5.0
+            }
+          ]
+        },
+        {
+          "id": "flats",
+          "name": "flats",
+          "type": "group",
+          "children": [
+            {
+              "id": "skin_base",
+              "name": "skin_base",
+              "type": "paint",
+              "ops": [
+                {
+                  "type": "fill_solid",
+                  "x": 160,
+                  "y": 110,
+                  "width": 192,
+                  "height": 170,
+                  "color": "#F7D2C0FF"
+                }
+              ]
+            },
+            {
+              "id": "hair_base",
+              "name": "hair_base",
+              "type": "paint",
+              "ops": [
+                {
+                  "type": "fill_solid",
+                  "x": 146,
+                  "y": 70,
+                  "width": 220,
+                  "height": 146,
+                  "color": "#5B3C55FF"
+                }
+              ]
+            },
+            {
+              "id": "eyes_base",
+              "name": "eyes_base",
+              "type": "imported_raster",
+              "ops": [
+                {
+                  "type": "import_png",
+                  "resource_id": "eye_highlight_png",
+                  "x": 224,
+                  "y": 160
+                }
+              ]
+            },
+            {
+              "id": "clothes_base",
+              "name": "clothes_base",
+              "type": "paint",
+              "ops": [
+                {
+                  "type": "fill_solid",
+                  "x": 138,
+                  "y": 258,
+                  "width": 238,
+                  "height": 168,
+                  "color": "#C9E2F3FF"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "shadows",
+          "name": "shadows",
+          "type": "paint",
+          "blend_mode": "multiply",
+          "opacity": 0.35,
+          "masks": [
+            {
+              "id": "shadow_mask",
+              "name": "shadow_mask",
+              "type": "transparency_mask",
+              "selection": {
+                "rectangles": [
+                  {
+                    "x": 170,
+                    "y": 124,
+                    "width": 166,
+                    "height": 248,
+                    "value": 255
+                  }
+                ]
+              }
+            }
+          ],
+          "ops": [
+            {
+              "type": "fill_solid",
+              "x": 186,
+              "y": 152,
+              "width": 132,
+              "height": 192,
+              "color": "#7E4F5A88"
+            }
+          ]
+        },
+        {
+          "id": "highlights",
+          "name": "highlights",
+          "type": "paint",
+          "blend_mode": "screen",
+          "opacity": 0.75,
+          "masks": [
+            {
+              "id": "highlight_transform",
+              "name": "highlight_transform",
+              "type": "transform_mask",
+              "transform": {
+                "translate": [2, -2],
+                "scale": [1.0, 1.0]
+              }
+            }
+          ],
+          "ops": [
+            {
+              "type": "put_pixels",
+              "x": 240,
+              "y": 174,
+              "rows": [
+                ["#FFFFFFFF", "#FFF8C0FF", "#FFFFFFFF"],
+                ["#FFF8C0FF", "#FFFFFFFF", "#FFF8C0FF"],
+                ["#FFFFFFFF", "#FFF8C0FF", "#FFFFFFFF"]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "accessories",
+          "name": "accessories",
+          "type": "vector",
+          "opacity": 0.9,
+          "ops": [
+            {
+              "type": "add_svg",
+              "resource_id": "sparkle_svg"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "exports": [
+    {
+      "kind": "kra",
+      "file_name": "demo_anime_bust.kra",
+      "enabled": true
+    },
+    {
+      "kind": "png",
+      "file_name": "demo_anime_bust_preview.png",
+      "enabled": true
+    },
+    {
+      "kind": "psd",
+      "file_name": "demo_anime_bust.psd",
+      "enabled": false
+    }
+  ]
+}

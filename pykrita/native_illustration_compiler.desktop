@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=native_illustration_compiler
+X-Python-2-Compatible=false
+X-Krita-Manual=Native Illustration Compiler
+Name=Native Illustration Compiler
+Comment=Compile structured IR JSON into editable Krita .kra documents
+

@@ -1,0 +1,124 @@
+{
+  "meta": {
+    "schema_version": "0.1.0",
+    "title": "Vector accessories demo",
+    "generator": "native-illustration-compiler-v0"
+  },
+  "document": {
+    "width": 512,
+    "height": 512,
+    "dpi": 144,
+    "color_model": "RGBA",
+    "color_depth": "U8",
+    "background_color": "#EEF8FFFF",
+    "file_name": "demo_vector_accessories"
+  },
+  "resources": [
+    {
+      "id": "face_base_png",
+      "kind": "png",
+      "path": "assets/face_base.png"
+    },
+    {
+      "id": "glasses_svg",
+      "kind": "svg",
+      "path": "assets/glasses.svg"
+    },
+    {
+      "id": "sparkle_svg",
+      "kind": "svg",
+      "path": "assets/sparkle.svg"
+    }
+  ],
+  "layers": [
+    {
+      "id": "background",
+      "name": "background",
+      "type": "paint",
+      "ops": [
+        {
+          "type": "fill_solid",
+          "color": "#EEF8FFFF"
+        }
+      ]
+    },
+    {
+      "id": "portrait",
+      "name": "portrait",
+      "type": "group",
+      "children": [
+        {
+          "id": "face_base",
+          "name": "face_base",
+          "type": "imported_raster",
+          "ops": [
+            {
+              "type": "import_png",
+              "resource_id": "face_base_png",
+              "x": 128,
+              "y": 88
+            }
+          ]
+        },
+        {
+          "id": "cheek_blush",
+          "name": "cheek_blush",
+          "type": "paint",
+          "blend_mode": "multiply",
+          "opacity": 0.55,
+          "ops": [
+            {
+              "type": "put_pixels",
+              "x": 188,
+              "y": 236,
+              "rows": [
+                ["#F2A2B0AA", "#F7B3BEAA", "#F2A2B0AA"],
+                ["#F7B3BEAA", "#FAD0D6AA", "#F7B3BEAA"],
+                ["#F2A2B0AA", "#F7B3BEAA", "#F2A2B0AA"]
+              ]
+            }
+          ]
+        },
+        {
+          "id": "glasses",
+          "name": "glasses",
+          "type": "vector",
+          "ops": [
+            {
+              "type": "add_svg",
+              "resource_id": "glasses_svg"
+            }
+          ]
+        },
+        {
+          "id": "decorations",
+          "name": "decorations",
+          "type": "vector",
+          "ops": [
+            {
+              "type": "add_svg",
+              "resource_id": "sparkle_svg"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "exports": [
+    {
+      "kind": "kra",
+      "file_name": "demo_vector_accessories.kra",
+      "enabled": true
+    },
+    {
+      "kind": "png",
+      "file_name": "demo_vector_accessories_preview.png",
+      "enabled": true
+    },
+    {
+      "kind": "psd",
+      "file_name": "demo_vector_accessories.psd",
+      "enabled": false
+    }
+  ]
+}
