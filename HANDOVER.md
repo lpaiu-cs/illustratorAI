@@ -72,11 +72,21 @@
 - **실기 비전 스모크 성공**: qwen3-vl:8b, 64×64 스마일리, 세션 내 오류 0건, `stop_reason=finish`, PNG(366B), 8블록
 - **pytest 78개 통과** (`test_error_observations_include_full_state` 추가)
 
+### 3.6 Stage 0 대량 수집 자동화 (3번 완료) ✅
+- **`stage0.py`** (순수 로직): `load_goals`(주석·빈줄 스킵), `is_collection_success`(ok+finish+PNG 셋), `build_manifest_entry`, `run_batch`(manifest.jsonl 어펜드+flush), `summarize_batch`, `read_manifest`
+- **`run_stage0_llm.py` 리팩터**: `run_single_session()` 추출 — 배치가 재사용, 세션마다 `summary.json` 기록
+- **`run_stage0_batch.py`**: 목표 파일 일괄 실행 CLI (`--goals-file --limit --resume --no-vision`)
+- **성공 판정**: `ok && stop_reason==finish && exported_png 비어있지 않음` — finish해도 export 누락이면 FAIL 처리 확인
+- **--resume 검증**: 성공분 스킵, 실패만 재실행 (스모크에서 실패 1건 회복)
+- **실기 배치 스모크**(3목표): 1차 1/3 성공 → resume 재실행으로 2/3. 파이프라인은 정상, **모델 변동성이 병목**(같은 스마일리 목표가 실행마다 성패 갈림)
+- **pytest 84개 통과** (`test_stage0.py` 6건 추가)
+
 ---
 
 ## 4. 검증 결과
-- pytest **78개 통과**
+- pytest **84개 통과**
 - 실기 비전 스모크: qwen3-vl:8b가 캔버스 렌더를 보며 64×64 스마일리 완주 — 세션 내 오류 0건, `stop_reason=finish`, PNG(366B) 내보내기, 8블록
+- 배치 스모크(3목표): 1차 1/3 → resume 후 2/3 성공, 성공 판정·스킵·재실행 모두 확인
 - **핵심 발견**: qwen3-vl은 thinking 모드에서 무한 추론 → `/no_think` + `format:json` + `response_format:json_object` + `max_tokens=8192`로 해결
 - SVG 단일 루트 `<g>` 그룹 강제 규칙으로 다중 요소 결합 문제 해결
 - **에이전트 관찰 설계 교훈**: 오류 턴이라도 전체 상태(layers 목록 등)를 관찰에 실어야 모델이 자기 수정 가능 — 상태 없는 오류 보고는 복구를 막는다
@@ -85,14 +95,16 @@
 
 ## 5. 다음 단계 (우선순위 순)
 
-### ① Stage 0 대량 수집 자동화 (최우선) 🔴
-- **이유**: 액션 스페이스·비전 피드백 루프가 모두 안정화 → 데이터 수집 준비 완료
-- **구현**: 목표 프롬프트 세트(100~1000개) 자동 실행 → 세션 로그/PNG 수집 → Stage 1 SFT 데이터셋 생성
-- **참고**: `run_stage0_llm.py` 단일 실행은 검증됨 — 배치 실행기 + 성공 필터(stop_reason=finish) + 데이터셋 직렬화만 추가
+### ① 수집 성공률 개선 (최우선) 🔴
+- **이유**: 배치 파이프라인은 정상이지만 모델 변동성으로 1차 성공률 ~33% (스마일리 목표조차 실행마다 성패 갈림) — 대량 수집 전에 개선 필요
+- **후보**: temperature 낮춤(0.7→0.2~0.4), 실패 시 자동 재시도 예산(k회), finish 누락 시 export_png 자동 보정 여부 검토, 프롬프트 few-shot 예시 추가
 
-### ② 벡터 SVG 고급 기능 (품질 개선, 병행 가능)
+### ② 본격 수집 실행
+- **준비물**: 목표 프롬프트 세트 파일(100~1000개, 카테고리별) + `run_stage0_batch.py --resume` 반복 실행
+- **산출**: manifest.jsonl에서 success=true 세션만 Stage 1 SFT 데이터셋으로 직렬화 (세션 로그 → 액션 시퀀스 + 관찰)
+
+### ③ 벡터 SVG 고급 기능 (품질 개선)
 - **대상**: 중첩 그룹, 마스크/클리핑 패스, 그라디언트/패턴 fill — `svg_raster.py` 확장 + Krita `addShapesFromSvg` 매핑
-- **우선순위 낮춘 근거**: 단일 `<g>` 기본 조합으로 이미 목표 그림 완주 확인
 
 ---
 
@@ -107,9 +119,9 @@
 ## 7. 즉시 재개 시 체크리스트
 1. `cd E:\lab\illustratorAI`
 2. `ollama ps` → `qwen3-vl:8b` 로드 확인
-3. `python -m pytest -q` → 78 passed 확인
-4. 비전 스모크 재현: `python scripts/dev/run_stage0_llm.py --goal "Draw a 64x64 smiley face: yellow circle outline, two eyes, a smiling mouth." --model qwen3-vl:8b --client ollama --canvas 64x64 --max-blocks 10 --output-dir output/test_vision`
-   - 기대: 세션 오류 0건, `stop_reason=finish`, smiley.png 내보내기
+3. `python -m pytest -q` → 84 passed 확인
+4. 단일 비전 스모크: `python scripts/dev/run_stage0_llm.py --goal "Draw a 64x64 smiley face: yellow circle outline, two eyes, a smiling mouth." --model qwen3-vl:8b --client ollama --canvas 64x64 --max-blocks 10 --output-dir output/test_vision`
+5. 배치 스모크: 목표 파일 준비 후 `python scripts/dev/run_stage0_batch.py --goals-file <파일> --model qwen3-vl:8b --canvas 64x64 --max-blocks 10 --output-root output/stage0_batch/<이름>` (재실행 시 `--resume`)
 
 ---
 

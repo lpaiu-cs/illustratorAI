@@ -13,13 +13,6 @@ def main() -> int:
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
 
-    from nic_agent.chat import OllamaChatClient, OpenAICompatChatClient
-    from nic_agent.executor import ActionExecutor
-    from nic_agent.headless_backend import HeadlessBackend
-    from nic_agent.loop import AgentLoop
-    from nic_agent.planner import LLMPolicy
-    from nic_agent.session_log import SessionLogger
-
     parser = argparse.ArgumentParser(description="Run a Stage 0 LLM drawing session (headless)")
     parser.add_argument("--goal", required=True, help="Natural language drawing goal")
     parser.add_argument("--canvas", default="128x128", help="WxH, e.g. 128x128")
@@ -53,59 +46,90 @@ def main() -> int:
         parser.error("--model or NIC_LLM_MODEL is required")
 
     width_text, height_text = args.canvas.lower().split("x", 1)
-    width, height = int(width_text), int(height_text)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    if args.client == "ollama":
-        client = OllamaChatClient(base_url=args.base_url, model=args.model)
+    summary = run_single_session(
+        args.goal,
+        model=args.model,
+        client=args.client,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        width=int(width_text),
+        height=int(height_text),
+        max_blocks=args.max_blocks,
+        output_dir=args.output_dir,
+        attach_vision=not args.no_vision,
+    )
+
+    print(json.dumps({"goal": args.goal, **summary}, ensure_ascii=False, indent=2))
+    if summary["last_feedback"]:
+        print("Last feedback:", json.dumps(summary["last_feedback"], ensure_ascii=False))
+    return 0 if summary["ok"] else 1
+
+
+def run_single_session(
+    goal: str,
+    *,
+    model: str,
+    client: str = "ollama",
+    base_url: str = "http://127.0.0.1:11434",
+    api_key: str = "",
+    width: int = 128,
+    height: int = 128,
+    max_blocks: int = 16,
+    output_dir: Path,
+    attach_vision: bool = True,
+) -> dict:
+    from nic_agent.chat import OllamaChatClient, OpenAICompatChatClient
+    from nic_agent.executor import ActionExecutor
+    from nic_agent.headless_backend import HeadlessBackend
+    from nic_agent.loop import AgentLoop
+    from nic_agent.planner import LLMPolicy
+    from nic_agent.session_log import SessionLogger
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if client == "ollama":
+        chat_client = OllamaChatClient(base_url=base_url, model=model)
     else:
-        base_url = args.base_url
-        if not base_url.rstrip("/").endswith("/v1"):
-            base_url = base_url.rstrip("/") + "/v1"
-        client = OpenAICompatChatClient(
-            base_url=base_url,
-            model=args.model,
-            api_key=args.api_key or None,
+        resolved_base_url = base_url
+        if not resolved_base_url.rstrip("/").endswith("/v1"):
+            resolved_base_url = resolved_base_url.rstrip("/") + "/v1"
+        chat_client = OpenAICompatChatClient(
+            base_url=resolved_base_url,
+            model=model,
+            api_key=api_key or None,
         )
-    executor = ActionExecutor(HeadlessBackend(output_root=args.output_dir))
-    image_provider = None if args.no_vision else lambda: executor.backend.canvas_png_base64()
+    executor = ActionExecutor(HeadlessBackend(output_root=output_dir))
+    image_provider = executor.backend.canvas_png_base64 if attach_vision else None
     goal_with_canvas = (
-        f"{args.goal}\nThe first action must be a create_document of exactly {width}x{height}."
+        f"{goal}\nThe first action must be a create_document of exactly {width}x{height}."
     )
     policy = LLMPolicy(
-        client,
+        chat_client,
         goal=goal_with_canvas,
-        max_blocks=args.max_blocks,
+        max_blocks=max_blocks,
         image_provider=image_provider,
-        suppress_thinking=args.client == "ollama",
+        suppress_thinking=client == "ollama",
     )
-    log_path = args.output_dir / "session.jsonl"
+    log_path = output_dir / "session.jsonl"
 
     with SessionLogger(log_path) as logger:
-        summary = AgentLoop(executor, logger).run(policy)
+        loop_summary = AgentLoop(executor, logger).run(policy)
 
-    exported = sorted(path.name for path in args.output_dir.glob("*.png"))
-    print(
-        json.dumps(
-            {
-                "goal": args.goal,
-                "steps": summary.steps,
-                "ok": summary.ok,
-                "stop_reason": summary.stop_reason,
-                "fingerprint": summary.fingerprint,
-                "blocks_used": policy.blocks_used,
-                "exported_png": exported,
-                "session_log": str(log_path),
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+    exported = sorted(path.name for path in output_dir.glob("*.png"))
+    summary = {
+        "steps": loop_summary.steps,
+        "ok": loop_summary.ok,
+        "stop_reason": loop_summary.stop_reason,
+        "fingerprint": loop_summary.fingerprint,
+        "blocks_used": policy.blocks_used,
+        "exported_png": exported,
+        "session_log": str(log_path),
+        "last_feedback": list(policy.last_feedback),
+    }
+    (output_dir / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
-    feedback = list(policy.last_feedback)
-    if feedback:
-        print("Last feedback:", json.dumps(feedback, ensure_ascii=False))
-    return 0 if summary.ok else 1
+    return summary
 
 
 if __name__ == "__main__":
