@@ -363,6 +363,9 @@ def _arc_points(start, end, rx, ry, rotation_degrees, large_arc, sweep):
     return points
 
 
+SUPERSAMPLE = 4
+
+
 def render_shapes_on_node(node, content: SvgContent) -> tuple[int, int, int, int] | None:
     if not content.shapes:
         return None
@@ -383,21 +386,25 @@ def render_shapes_on_node(node, content: SvgContent) -> tuple[int, int, int, int
         return None
     block_width = right - left
     block_height = bottom - top
-    canvas = bytearray(node.pixelData(left, top, block_width, block_height))
-    if len(canvas) != block_width * block_height * 4:
-        canvas = bytearray(block_width * block_height * 4)
+    scale = SUPERSAMPLE
+    super_width = block_width * scale
+    super_height = block_height * scale
+    canvas = bytearray(super_width * super_height * 4)
 
     def stamp(x: float, y: float, rgba, size: float) -> None:
         ix, iy = int(round(x)), int(round(y))
         radius_int = max(1, int(math.ceil(size / 2.0)))
-        _stamp_circle(canvas, block_width, block_height, ix - left, iy - top, radius_int, rgba)
+        _stamp_circle(canvas, super_width, super_height, ix, iy, radius_int, rgba)
 
     for shape in content.shapes:
         if shape.fill is not None and shape.closed:
-            for y, span_start, span_end in _polygon_spans(shape.points):
-                row = y - top
-                for x in range(max(span_start, left), min(span_end + 1, right)):
-                    offset = (row * block_width + (x - left)) * 4
+            scaled_points = [
+                ((x - left) * scale, (y - top) * scale) for x, y in shape.points
+            ]
+            for y, span_start, span_end in _polygon_spans(scaled_points):
+                row = int(y)
+                for x in range(max(span_start, 0), min(span_end + 1, super_width)):
+                    offset = (row * super_width + x) * 4
                     _alpha_over(canvas, offset, shape.fill)
     for shape in content.shapes:
         if shape.stroke is None:
@@ -405,13 +412,60 @@ def render_shapes_on_node(node, content: SvgContent) -> tuple[int, int, int, int
         outline = list(shape.points)
         if shape.closed:
             outline.append(outline[0])
-        for start, end in zip(outline, outline[1:]):
-            for bx, by in _bresenham(int(round(start[0])), int(round(start[1])), int(round(end[0])), int(round(end[1]))):
-                stamp(bx, by, shape.stroke, shape.width)
+        scaled_outline = [((x - left) * scale, (y - top) * scale) for x, y in outline]
+        stroke_width = shape.width * scale
+        for start, end in zip(scaled_outline, scaled_outline[1:]):
+            steps = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+            count = max(1, int(steps))
+            for step_index in range(count + 1):
+                ratio = step_index / count
+                sx = start[0] + (end[0] - start[0]) * ratio
+                sy = start[1] + (end[1] - start[1]) * ratio
+                stamp(sx, sy, shape.stroke, stroke_width)
 
-    if not node.setPixelData(bytes(canvas), left, top, block_width, block_height):
-        return None
+    _downsample_onto_node(
+        node,
+        canvas,
+        super_width,
+        left,
+        top,
+        block_width,
+        block_height,
+        scale,
+    )
     return (left, top, block_width, block_height)
+
+
+def _downsample_onto_node(node, canvas, super_width, left, top, width, height, scale):
+    region = bytearray(node.pixelData(left, top, width, height))
+    if len(region) != width * height * 4:
+        region = bytearray(width * height * 4)
+    area = scale * scale
+    for row in range(height):
+        for column in range(width):
+            total_alpha = 0
+            total_r = total_g = total_b = 0
+            for sub_y in range(scale):
+                base = ((row * scale + sub_y) * super_width + column * scale) * 4
+                for sub_x in range(scale):
+                    offset = base + sub_x * 4
+                    alpha = canvas[offset + 3]
+                    total_alpha += alpha
+                    total_r += canvas[offset] * alpha
+                    total_g += canvas[offset + 1] * alpha
+                    total_b += canvas[offset + 2] * alpha
+            avg_alpha = total_alpha // area
+            keep = 255 - avg_alpha
+            offset = (row * width + column) * 4
+            bg_alpha = region[offset + 3]
+            denom = area * 255
+            for channel, total_color in enumerate((total_r, total_g, total_b)):
+                premult = (total_color + denom // 2) // denom
+                region[offset + channel] = min(
+                    255, premult + region[offset + channel] * keep // 255
+                )
+            region[offset + 3] = min(255, avg_alpha + bg_alpha * keep // 255)
+    node.setPixelData(bytes(region), left, top, width, height)
 
 
 def _polygon_spans(points):

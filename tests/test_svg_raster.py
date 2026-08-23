@@ -28,8 +28,10 @@ def test_rect_outline_strokes_border_only():
     node = make_node()
     touched = render_shapes_on_node(node, content)
     assert touched == (3, 3, 18, 18)
-    assert pixel(node, 12, 4) == (255, 0, 0, 255)
-    assert pixel(node, 12, 20) == (255, 0, 0, 255)
+    top = pixel(node, 12, 4)
+    bottom = pixel(node, 12, 20)
+    assert top[0] >= 191 and top[3] >= 128
+    assert bottom[0] >= 191 and bottom[3] >= 128
     assert pixel(node, 12, 12) == (0, 0, 0, 0)
 
 
@@ -52,7 +54,17 @@ def test_open_line_without_stroke_falls_back_to_black():
     content = parse_svg(SVG_NS.format('<line x1="4" y1="16" x2="28" y2="16"/>'))
     node = make_node()
     render_shapes_on_node(node, content)
-    assert pixel(node, 16, 16) == (0, 0, 0, 255)
+    center = pixel(node, 16, 16)
+    assert center[3] >= 128 and center[0] == 0
+
+
+def test_circle_edges_are_antialiased():
+    content = parse_svg(SVG_NS.format('<circle cx="16" cy="16" r="8" fill="#FF0000"/>'))
+    node = make_node()
+    render_shapes_on_node(node, content)
+    edge_alphas = [pixel(node, x, 16)[3] for x in range(7, 11)]
+    assert any(0 < alpha < 255 for alpha in edge_alphas)
+    assert pixel(node, 16, 16) == (255, 0, 0, 255)
 
 
 def test_cubic_path_produces_ink_along_curve():
