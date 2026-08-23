@@ -208,13 +208,15 @@ def test_ollama_client_posts_openai_compat_payload_with_images():
     ]
     content = client.complete(messages)
     assert content == '{"ok": 1}'
-    assert client.last_thinking is None  # OpenAI compat doesn't expose thinking separately
     assert captured["url"].endswith("/v1/chat/completions")
     body = captured["body"]
     assert body["model"] == "qwen3-vl:8b"
     assert body["messages"][0] == {"role": "system", "content": "sys"}
-    assert body["messages"][1]["content"] == "look"
-    assert body["messages"][1]["image_url"][0]["url"].startswith("data:image/png;base64,")
+    assert isinstance(body["messages"][1]["content"], list)
+    assert body["messages"][1]["content"][0] == {"type": "text", "text": "look"}
+    assert body["messages"][1]["content"][1]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
     assert body["max_tokens"] == 8192
     assert body["response_format"] == {"type": "json_object"}
 

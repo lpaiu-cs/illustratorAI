@@ -87,17 +87,23 @@ class OllamaChatClient:
         self.timeout = timeout
         self.temperature = temperature
         self.format_schema = format_schema
-        self.last_thinking: str | None = None
         self._transport = transport if transport is not None else urllib.request.urlopen
 
     def complete(self, messages: list[dict[str, Any]]) -> str:
         payload_messages = []
         for message in messages:
-            text, images = _split_content_parts(message.get("content"))
-            entry: dict[str, Any] = {"role": message.get("role", "user"), "content": text}
-            if images:
-                entry["image_url"] = [{"url": f"data:image/png;base64,{img}"} for img in images]
-            payload_messages.append(entry)
+            content = message.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if part.get("type") != "image_url":
+                        continue
+                    url = str(part.get("image_url", {}).get("url", ""))
+                    _, separator, encoded = url.partition("base64,")
+                    if not separator or not encoded:
+                        raise ChatError(
+                            "image_url parts must use data:image/...;base64,... urls"
+                        )
+            payload_messages.append({"role": message.get("role", "user"), "content": content})
         payload = {
             "model": self.model,
             "messages": payload_messages,
@@ -110,42 +116,6 @@ class OllamaChatClient:
                 "type": "json_schema",
                 "json_schema": self.format_schema,
             }
-        request = urllib.request.Request(
-            f"{self.base_url}/api/chat",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with self._transport(request, timeout=self.timeout) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            raise ChatError(f"ollama endpoint returned HTTP {exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise ChatError(f"ollama endpoint unreachable: {exc}") from exc
-        message = body.get("message") or {}
-        self.last_thinking = message.get("thinking") or None
-        content = message.get("content", "")
-        # If content is empty but thinking exists, use thinking as content
-        if not content and self.last_thinking:
-            content = self.last_thinking
-        return str(content)
-
-    def complete(self, messages: list[dict[str, Any]]) -> str:
-        payload_messages = []
-        for message in messages:
-            text, images = _split_content_parts(message.get("content"))
-            entry: dict[str, Any] = {"role": message.get("role", "user"), "content": text}
-            if images:
-                entry["image_url"] = [{"url": f"data:image/png;base64,{img}"} for img in images]
-            payload_messages.append(entry)
-        payload = {
-            "model": self.model,
-            "messages": payload_messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-            "response_format": {"type": "json_object"},
-        }
         request = urllib.request.Request(
             f"{self.base_url}/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -164,26 +134,3 @@ class OllamaChatClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise ChatError(f"unexpected chat response shape: {body!r}") from exc
         return str(content)
-
-
-def _split_content_parts(content: Any) -> tuple[str, list[str]]:
-    if isinstance(content, str):
-        return content, []
-    texts: list[str] = []
-    images: list[str] = []
-    for part in content:
-        kind = part.get("type")
-        if kind == "text":
-            texts.append(str(part.get("text", "")))
-        elif kind == "image_url":
-            url = str(part.get("image_url", {}).get("url", ""))
-            _, separator, encoded = url.partition("base64,")
-            if not separator or not encoded:
-                raise ChatError("image_url parts must use data:image/...;base64,... urls")
-            images.append(encoded)
-        else:
-            raise ChatError(f"unsupported message part type: {kind!r}")
-    return "\n".join(texts), images
-
-
-

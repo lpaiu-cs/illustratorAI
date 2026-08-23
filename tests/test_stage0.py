@@ -6,10 +6,14 @@ from nic_agent.stage0 import (
     classify_failure,
     extract_sft_samples,
     is_collection_success,
+    load_quality_passes,
     load_goals,
+    parse_judgement,
     read_manifest,
+    replay_fingerprint,
     run_batch,
     summarize_batch,
+    validate_sft_sample,
 )
 
 
@@ -225,3 +229,75 @@ def test_extract_sft_samples_elides_image_parts_via_conversation_copy():
     contents = [message["content"] for sample in samples for message in sample["messages"]]
     assert all(isinstance(content, str) for content in contents)
     assert "[image]" in contents
+
+
+def test_validate_sft_sample_accepts_wellformed_and_rejects_broken():
+    good = {
+        "messages": [
+            {"role": "user", "content": "goal"},
+            {"role": "assistant", "content": '{"thought": "t", "actions": [], "done": true}'},
+        ]
+    }
+    assert validate_sft_sample(good) == []
+
+    unparseable = {"messages": [{"role": "assistant", "content": "no json here"}]}
+    assert any("unparseable" in issue for issue in validate_sft_sample(unparseable))
+
+    missing_done = {
+        "messages": [{"role": "assistant", "content": '{"thought": "t", "actions": []}'}]
+    }
+    assert any("done" in issue for issue in validate_sft_sample(missing_done))
+
+    empty = {"messages": [{"role": "assistant", "content": ""}]}
+    assert any("empty" in issue for issue in validate_sft_sample(empty))
+
+
+def test_replay_fingerprint_matches_headless_document():
+    actions = [
+        {
+            "type": "create_document",
+            "payload": {"width": 16, "height": 16, "background_color": "#FFFFFFFF"},
+        },
+        {"type": "finish"},
+    ]
+    fingerprint = replay_fingerprint(actions)
+    assert fingerprint is not None
+    assert fingerprint == replay_fingerprint(actions)
+
+    from nic_agent.simulator import HeadlessDocument
+
+    document = HeadlessDocument(
+        width=16,
+        height=16,
+        background_rgba=(255, 255, 255, 255),
+        file_name="untitled",
+    )
+    assert fingerprint == document.fingerprint()
+
+
+def test_parse_judgement_accepts_wellformed_and_rejects_broken():
+    verdict = parse_judgement('{"match": true, "score": 8, "missing": [], "reasoning": "ok"}')
+    assert verdict == {"match": True, "score": 8, "missing": [], "reasoning": "ok"}
+    assert parse_judgement("no json") is None
+    assert parse_judgement('{"match": "yes", "score": 5}') is None
+    assert parse_judgement('{"match": true, "score": "high"}') is None
+    clamped = parse_judgement('{"match": false, "score": 42, "missing": ["eyes"], "reasoning": "r"}')
+    assert clamped["score"] == 10
+
+
+def test_load_quality_passes_filters_by_match_and_score(tmp_path):
+    path = tmp_path / "quality.jsonl"
+    records = [
+        {"session_log": r"C:\a\session.jsonl", "match": True, "score": 7},
+        {"session_log": r"C:\b\session.jsonl", "match": False, "score": 9},
+        {"session_log": r"C:\c\session.jsonl", "match": True, "score": 4},
+    ]
+    path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    passes = load_quality_passes([path], min_score=6)
+    assert len(passes) == 1
+    key = next(iter(passes))
+    assert key.endswith("c:\\a\\session.jsonl")
+
+
+def test_load_quality_passes_missing_file_returns_empty(tmp_path):
+    assert load_quality_passes([tmp_path / "missing.jsonl"], min_score=6) == {}

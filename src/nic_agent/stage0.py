@@ -197,3 +197,115 @@ def extract_sft_samples(
                 }
             )
     return samples
+
+
+def validate_sft_sample(sample: dict[str, Any]) -> list[str]:
+    from nic_agent.planner import extract_json_object
+
+    issues: list[str] = []
+    messages = sample.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return ["missing messages"]
+    last = messages[-1]
+    if last.get("role") != "assistant":
+        issues.append("last message is not assistant")
+        return issues
+    content = last.get("content")
+    if not isinstance(content, str) or not content.strip():
+        issues.append("empty assistant content")
+        return issues
+    try:
+        parsed = extract_json_object(content)
+    except ValueError as exc:
+        issues.append(f"unparseable assistant content: {exc}")
+        return issues
+    if not isinstance(parsed.get("actions"), list):
+        issues.append("actions is not a list")
+    if not isinstance(parsed.get("done"), bool):
+        issues.append("done is not a boolean")
+    return issues
+
+
+def replay_fingerprint(actions: list[dict[str, Any]]) -> str | None:
+    from nic_agent.executor import ActionExecutor
+    from nic_agent.headless_backend import HeadlessBackend
+
+    executor = ActionExecutor(HeadlessBackend(output_root=None))
+    for action in actions:
+        if action.get("type") == "export_png":
+            continue
+        executor.apply(action)
+    return executor.fingerprint()
+
+
+JUDGE_SYSTEM_PROMPT = (
+    "You are a strict art judge for an agentic drawing system."
+    " You get a drawing GOAL (text) and a RENDERED CANVAS image."
+    " Compare them carefully and respond with exactly one JSON object and nothing else:"
+    ' {"match": true or false, "score": integer 0-10,'
+    ' "missing": ["elements from the goal absent in the image"],'
+    ' "reasoning": "one short sentence"} .'
+    " Rules: match=true only if the main subject, its arrangement and colors"
+    " clearly satisfy the goal. Minor stylistic imperfections still count as match=true."
+)
+
+
+def normalize_session_path(path: str | Path) -> str:
+    return str(Path(path).resolve()).lower()
+
+
+def load_quality_passes(
+    quality_files: list[Path], min_score: int
+) -> dict[str, dict[str, Any]]:
+    passes: dict[str, dict[str, Any]] = {}
+    for quality_path in quality_files:
+        if not quality_path.exists():
+            continue
+        for line in quality_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            key = normalize_session_path(record["session_log"])
+            if record.get("match") and int(record.get("score", 0)) >= min_score:
+                passes[key] = record
+    return passes
+
+
+def build_judge_messages(goal: str, png_base64: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": JUDGE_SYSTEM_PROMPT + " /no_think"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"GOAL: {goal}\n\nJudge the attached canvas render."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{png_base64}"},
+                },
+            ],
+        },
+    ]
+
+
+def parse_judgement(text: str) -> dict[str, Any] | None:
+    from nic_agent.planner import extract_json_object
+
+    try:
+        parsed = extract_json_object(text)
+    except ValueError:
+        return None
+    match = parsed.get("match")
+    score = parsed.get("score")
+    if not isinstance(match, bool):
+        return None
+    try:
+        score_int = max(0, min(10, int(score)))
+    except (TypeError, ValueError):
+        return None
+    return {
+        "match": match,
+        "score": score_int,
+        "missing": parsed.get("missing") if isinstance(parsed.get("missing"), list) else [],
+        "reasoning": str(parsed.get("reasoning", "")),
+    }

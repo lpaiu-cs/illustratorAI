@@ -106,11 +106,30 @@
 - **결론**: 로컬 단일 모델로 목표당 ~9분이 물리적 현실. 100골 ≈ 15시간 — 청크 resume으로 분할 실행 필요
 - **pytest 97개 통과**
 
-### 3.9 수집 진행 현황
+### 3.9 수집 진행 현황과 파이프라인 선검증 ✅
 - `output/goals_100.txt` (100골) → chunk0~3 파일로 분할 (25골씩)
 - **full_c0: 20/25 실행, 9 성공** (manifest 누적, `--resume`로 계속)
 - **val5(chunk0의 20~24번): 5실행 2성공**
-- SFT 파이프라인 검증 완료: mini 배치 → clean 6샘플 / 전체 20샘플 추출 확인
+- **선검증 결과** (`validate_collection.py`):
+  - 재생 결정론성: 성공 세션 11/11 fingerprint 완전 일치 — 수집 궤적은 결정론적 재생 보장
+  - 샘플 정합성: 93건 중 8건 불량(세션 중간 빈/파편 응답 턴) → 빌더가 자동 탈락 처리
+- **데이터셋 v1 산출** (`output/sft/`):
+  - `dataset_v1_clean.jsonl`: 61 샘플(클린 세션만)
+  - `dataset_v1_all.jsonl`: 85 샘플(수선 세션 포함)
+  - 참조 PNG 전부 존재 확인, 샘플 구조(goal/messages/turn/used_repair) 검증
+
+### 3.10 품질 게이트 + 치명적 버그 수정 ✅⚠️
+- **치명적 버그 발견·수정** (`chat.py`): `OllamaChatClient`에 `complete()`가 **두 개** 존재해 앞의 구현이 뒤(/v1)에 덮여 죽은 코드였고, /v1 경로는 멀티파트 content를 `text`로 접은 뒤 이미지를 규격 외 최상위 `image_url` 필드로 전송 → **ollama가 무시**. 즉 지금까지 어떤 이미지도 모델에 전달된 적 없었음("비전 피드백"이 실은 텍스트 관찰만으로 동작). 이미지 elision 실험이 속도 불변이었던 이유도 이것
+- **수정**: complete() 단일화(content 리스트 그대로 전달 + base64 검증), 구조화 출력(json_schema)도 이제 실제 발동
+- **품질 게이트** (`screen_quality.py` + stage0 판정 로직): 성공 세션의 PNG(투명 배경은 흰색 합성)를 VLM이 goal과 대조 심사 → `{match, score 0-10, missing[], reasoning}`; `--quality-file`/`--min-score`로 데이터셋 빌더 필터 연결
+- **심사 결과(11건)**: **2건만 통과**(score 10×2), 나머지 9건 구체적 결함 지적 — "눈이 점이 아니라 별 모양", "지붕이 몸통 아래", "직선 입". 즉 기계적 성공의 82%가 실제 goal 미달 → SFT 오염 예방
+- **데이터셋 v2**: `dataset_v2_gated.jsonl` 5샘플(게이트+clean). SVG 렌더 품질(작은 원이 별처럼 보임)은 svg_raster 개선 신호
+- 참고: samples.html 브라우저 컨택트시트(`output/sft/samples.html`)
+- **pytest 102개 통과**
+
+### 3.11 Stage 1 학습 계층 (미착수) ⬜
+- 환경에 torch/transformers/peft **미설치** — 설치 필요(torch cu12x ~2.5GB + transformers/peft/datasets)
+- 스키마: `dataset_v2*.jsonl`(goal + messages 체인, assistant 종단) → LoRA SFT → 체크포인트 → 플래너 재투입 → 동일 목표 배치로 성공률 비교(진전 측정)
 
 ---
 
@@ -126,19 +145,20 @@
 
 ## 5. 다음 단계 (우선순위 순)
 
-### ① 본격 수집 완주 (청크 resume 방식) 🔴
-- **명령**(세션당 한 청크씩, ~2시간/25골):
-  `python scripts/dev/run_stage0_batch.py --goals-file output\goals_chunk1.txt --model qwen3-vl:8b --canvas 64x64 --max-blocks 8 --image-history 1 --output-root output\stage0_batch\full_c1`
-  (중단돼도 같은 명령 재실행 시 manifest 기준 이어서; full_c0은 `--resume` 붙여 계속, val5의 20~24번 성공분은 별도 manifest)
-- **예상**: 총 ~15시간 (qwen3-vl 처리량 상한)
-- **성공률 개선 여지**: 실패 골만 모아 2차 패스(temperature 0.3), repair_rounds 2
+### ① Stage 1 학습 계층 구축 (최우선) 🔴
+- **설치**: torch(cu12x)+transformers+peft+datasets — `requirements-train.txt`로 분리 권장
+- **구성**: `train_sft.py`(dataset_v2 소비, LoRA SFT, assistant 턴만 loss) → 초소형 오버피팅 테스트 → 체크포인트
+- **재투입 경로**: 체크포인트→GGUF 변환→ollama create 또는 vLLM 서버 → `--base-url`로 플래너 교체 → 동일 goals 배치 재실행해 성공률 비교
 
-### ② 속도 근본 개선 (선택)
-- thinking 억제가 확실한 비전 모델로 교체(예: qwen2.5-vl 계열 중 지능 높은 상위판, 또는 API VLM) — qwen2.5vl:7b는 15배 빠르지만 지시 추종 부족으로 탈락
-- OLLAMA_NUM_PARALLEL=2 등 서버측 병렬화 검토
+### ② 수집 완주 + 게이트 병행 (후속)
+- full_c0 `--resume` + chunk1~3 (~15시간). 수집 후 `screen_quality.py` 일괄 심사 → gated 데이터셋 누적
+- 실패 골 2차 패스(temperature 0.3), repair_rounds 2
 
-### ③ SFT 데이터셋 생성
-- `build_sft_dataset.py --manifest ... --manifest ... --out dataset.jsonl` (성공 세션 대상, repair 포함/제외 선택)
+### ③ svg_raster 렌더 품질 (게이트가 발견한 신호)
+- 작은 원/곡선이 별처럼 뭉개져 보임 — scanline 해상도·안티앨리어싱 개선 여지
+
+### ④ Krita 실기 E2E 스모크
+- 브리지 경로(캔버스 렌더→VLM→액션 주입) 실기 검증 — 아직 headless만 검증됨
 
 ---
 

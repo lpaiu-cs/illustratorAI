@@ -10,7 +10,13 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from nic_agent.stage0 import extract_sft_samples, read_manifest  # noqa: E402
+from nic_agent.stage0 import (  # noqa: E402
+    extract_sft_samples,
+    load_quality_passes,
+    normalize_session_path,
+    read_manifest,
+    validate_sft_sample,
+)
 
 
 def main() -> int:
@@ -28,10 +34,35 @@ def main() -> int:
         action="store_true",
         help="Keep sessions that needed repair rounds (default: clean sessions only)",
     )
+    parser.add_argument(
+        "--quality-file",
+        type=Path,
+        action="append",
+        default=None,
+        help="quality.jsonl from screen_quality.py; when given, only judged-pass sessions are kept",
+    )
+    parser.add_argument(
+        "--min-score",
+        type=int,
+        default=6,
+        help="Minimum judge score (0-10) when --quality-file is used (default 6)",
+    )
     args = parser.parse_args()
 
+    quality_passes = None
+    if args.quality_file:
+        quality_passes = load_quality_passes(args.quality_file, args.min_score)
+
     samples = []
-    stats = {"sessions": 0, "success": 0, "skipped_repair": 0, "missing_conversation": 0}
+    stats = {
+        "sessions": 0,
+        "success": 0,
+        "skipped_repair": 0,
+        "skipped_quality": 0,
+        "missing_conversation": 0,
+        "raw_samples": 0,
+        "dropped_invalid_samples": 0,
+    }
     for manifest_path in args.manifest:
         for entry in read_manifest(manifest_path):
             stats["sessions"] += 1
@@ -40,6 +71,11 @@ def main() -> int:
             stats["success"] += 1
             if entry.get("repair_rounds_used") and not args.include_repair:
                 stats["skipped_repair"] += 1
+                continue
+            if quality_passes is not None and (
+                normalize_session_path(entry["session_log"]) not in quality_passes
+            ):
+                stats["skipped_quality"] += 1
                 continue
             session_log = Path(entry["session_log"])
             conversation_path = session_log.parent / "conversation.jsonl"
@@ -57,7 +93,12 @@ def main() -> int:
                 "repair_rounds_used": entry.get("repair_rounds_used") or 0,
                 "manifest": str(manifest_path),
             }
-            samples.extend(extract_sft_samples(conversation, meta))
+            for sample in extract_sft_samples(conversation, meta):
+                stats["raw_samples"] += 1
+                if validate_sft_sample(sample):
+                    stats["dropped_invalid_samples"] += 1
+                    continue
+                samples.append(sample)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as stream:
