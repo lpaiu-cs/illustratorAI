@@ -89,7 +89,13 @@ def main() -> int:
     if args.prepare_only:
         return 0
 
-    model = AutoModelForCausalLM.from_pretrained(
+    if "vl" in args.base_model.lower():
+        from transformers import AutoModelForImageTextToText
+
+        model_cls = AutoModelForImageTextToText
+    else:
+        model_cls = __import__("transformers", fromlist=["AutoModelForCausalLM"]).AutoModelForCausalLM
+    model = model_cls.from_pretrained(
         args.base_model,
         dtype=torch.bfloat16,
         attn_implementation="sdpa",

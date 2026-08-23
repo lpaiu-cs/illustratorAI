@@ -148,10 +148,23 @@
   - 텍스트 모델이라 이미지 요청 시 mmproj 없음으로 500 — **실전 재투입엔 VL 베이스(Qwen2.5-VL-3B/7B, mmproj GGUF 포함) 필수**
 - **pytest 105개 통과**
 
+### 3.13 진짜 사이클 1회 완주 — VL-3B 재투입 ✅
+- **다운로드**: Qwen/Qwen2.5-VL-3B-Instruct (HF 캐시 `E:\hf-cache`)
+- **학습**: 게이트 통과 5샘플 LoRA — 37M 파라미터(0.98%), loss 0.51→0.075 (`output/sft/lora_vl3b`)
+- **병합**: `merge_lora.py` VL 지원(AutoModelForImageTextToText, adapter_config의 base_model 자동 감지). 병합 디렉토리에 **preprocessor_config.json/chat_template.json 복사 필요**(mmproj 변환용)
+- **GGUF**: 메인 6.17GB + mmproj 1.34GB (`--mmproj` 플래그)
+- **ollama 등록**: Modelfile에 FROM 두 줄(메인+mmproj) — 멀티모달 등록 확인, 이미지 색 판별 5초 응답
+- **재투입 배치**(미니 3골): **1/3 성공(finish)** + 1건 근접 실패(finish했으나 export 누락) + 1건 레이어 오류 반복(too_many_failures)
+  - 텍스트 전용 0.5B(0/3 무한루프) 대비 질적 도약 — 진짜 비전 + 형식 학습 결합 확인
+  - 실패 유형: unknown_layer/unknown_parent_layer 반복 → 레이어 상태 추종 약점 = 더 많은 데이터로 개선될 영역
+- **순환 완결**: 수집→게이트→데이터셋→SFT→병합→GGUF(mmproj)→ollama→재투입 성공률 측정까지 전 경로 실기 가동
+- **pytest 105개 통과**
+
 ### 순환 전체 요약
 ```
 수집(batch+resume) → 선검증(replay/샘플) → 품질게이트(VLM) → 데이터셋(gated)
-→ LoRA SFT(train_sft) → 병합(merge_lora) → GGUF → ollama create → 재투입 배치
+→ LoRA SFT(train_sft) → 병합(merge_lora) → GGUF(+mmproj) → ollama create
+→ 재투입 배치 → 성공률 비교  ✅ 전 경로 가동 확인 (2026-08-24)
 ```
 
 ---
@@ -168,12 +181,14 @@
 
 ## 5. 다음 단계 (우선순위 순)
 
-### ① 진짜 사이클 1회 — VL 베이스 전환 + 데이터 증량 🔴
-- 베이스를 **Qwen2.5-VL-3B-Instruct**로: HF 다운로드 → 게이트 통과 데이터로 LoRA → 병합 → GGUF(**mmproj 포함**) → ollama create → 미니 배치 성공률 측정
-- 데이터 볼륨: 현재 5샘플은 형식 학습 한계 — 수집 완주(full_c0 resume + chunk1~3)와 병행해 수백 샘플 확보 후 재학습
+### ① 데이터 증량 사이클 반복 🔴
+- 파이프라인이 전부 가동되므로 이제 변수는 **데이터 볼륨** 하나
+- 수집 완주(full_c0 `--resume` + chunk1~3) → 게이트 일괄 심사 → 데이터셋 누적 → VL-3B 재학습 → 재투입 배치로 성공률 추적(기준선: 미니 3골 1/3)
+- 실패 패턴(unknown_layer 반복)은 관찰에 자기교정 사례가 쌓이면 개선 기대
 
-### ② 수집 완주 + 게이트 병행 (후속)
-- full_c0 `--resume` + chunk1~3 (~15시간). `screen_quality.py` 일괄 심사 누적
+### ② 학습 신호 확장 (병행)
+- conversation 덤프에 캔버스 렌더 포함(현재 [image] 생략) → 이미지 조건부 SFT
+- export/finish 타이밍 강화: repair 궤적 포함 학습(`--include-repair`) 또는 완료 턴 가중
 
 ### ③ svg_raster 렌더 품질
 - 작은 원/곡선이 별처럼 뭉개짐(게이트 심사 근거) — scanline 해상도·AA 개선

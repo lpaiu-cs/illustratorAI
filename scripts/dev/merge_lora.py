@@ -1,7 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
+
+
+def resolve_model_cls(base_model_id: str):
+    if "vl" in base_model_id.lower():
+        from transformers import AutoModelForImageTextToText
+
+        return AutoModelForImageTextToText
+    from transformers import AutoModelForCausalLM
+
+    return AutoModelForCausalLM
 
 
 def main() -> int:
@@ -11,16 +22,18 @@ def main() -> int:
     args = parser.parse_args()
 
     import torch
-    from peft import AutoPeftModelForCausalLM
+    from peft import PeftModel
+    from transformers import AutoTokenizer
 
-    model = AutoPeftModelForCausalLM.from_pretrained(
-        args.adapter, dtype=torch.bfloat16, device_map="cpu"
-    )
-    merged = model.merge_and_unload()
+    adapter_config = json.loads((args.adapter / "adapter_config.json").read_text(encoding="utf-8"))
+    base_model_id = adapter_config["base_model_name_or_path"]
+    model_cls = resolve_model_cls(base_model_id)
+
+    model = model_cls.from_pretrained(base_model_id, dtype=torch.bfloat16, device_map="cpu")
+    peft_model = PeftModel.from_pretrained(model, args.adapter)
+    merged = peft_model.merge_and_unload()
     args.out.mkdir(parents=True, exist_ok=True)
     merged.save_pretrained(args.out)
-
-    from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(args.adapter)
     tokenizer.save_pretrained(args.out)
