@@ -159,7 +159,23 @@ def run_batch(
             if resume and index in succeeded:
                 log(f"[{index:04d}] skip (already succeeded)")
                 continue
-            summary = runner(index, goal)
+            try:
+                summary = runner(index, goal)
+            except Exception as exc:  # noqa: BLE001
+                summary = {
+                    "steps": 0,
+                    "ok": False,
+                    "stop_reason": "runner_error",
+                    "fingerprint": None,
+                    "blocks_used": 0,
+                    "exported_png": [],
+                    "session_log": "",
+                    "last_feedback": [],
+                    "failure_classes": ["runner_error"],
+                    "repair_rounds_used": 0,
+                    "error": str(exc),
+                }
+                log(f"[{index:04d}] runner_error: {str(exc)[:120]}")
             entry = build_manifest_entry(index, goal, summary)
             stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
             stream.flush()

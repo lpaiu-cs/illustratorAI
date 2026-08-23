@@ -136,6 +136,24 @@
 - 참고: 현재 conversation 덤프는 이미지가 `[image]` 생략된 텍스트 체인 — Stage 1a는 텍스트 모방 학습. 이미지 조건부 학습은 덤프에 렌더 포함 후 확장
 - **pytest 105개 통과**
 
+### 3.12 재투입 경로 개통 ✅ (구조 순환 폐쇄)
+- **병합**: `merge_lora.py` (AutoPeftModelForCausalLM → merge_and_unload → bf16 저장)
+- **GGUF 변환**: llama.cpp `convert_hf_to_gguf.py` — transformers 4.x 필요(5.x 호환 안 됨, `transformers>=4.55,<5` 유지) + 병합 출력의 `extra_special_tokens` 키 제거 필요(PowerShell 재기록 시 **BOM 금지**)
+- **ollama 등록**: Modelfile에 `PARAMETER num_ctx 8192` 명시 권장(기본값 위험)
+- **chat.py**: 구조화 출력은 `/v1` json_schema를 ollama가 무시 → **네이티브 `/api/chat` `format` 경로 추가**(스키마 있을 때만 분기). 이제 스키마가 실제 강제됨
+- **run_batch 내성**: runner 예외 시 세션 실패 기록 후 계속(배치 크래시 제거)
+- **재투입 스모크 결과**(0.5B + 게이트 5샘플 파인튜닝):
+  - 첫 골을 **1블록 만에 전체 궤적(finish 포함)**으로 완주 — 형식 학습 확인
+  - `--no-vision`에서 스키마 유효 액션이 수십 스텝 실행되나 export/finish 없이 소진 — 5샘플 0.5B의 일반화 한계(예상 범위)
+  - 텍스트 모델이라 이미지 요청 시 mmproj 없음으로 500 — **실전 재투입엔 VL 베이스(Qwen2.5-VL-3B/7B, mmproj GGUF 포함) 필수**
+- **pytest 105개 통과**
+
+### 순환 전체 요약
+```
+수집(batch+resume) → 선검증(replay/샘플) → 품질게이트(VLM) → 데이터셋(gated)
+→ LoRA SFT(train_sft) → 병합(merge_lora) → GGUF → ollama create → 재투입 배치
+```
+
 ---
 
 ## 4. 검증 결과
@@ -150,20 +168,18 @@
 
 ## 5. 다음 단계 (우선순위 순)
 
-### ① 재투입 경로 완성 — 구조 순환의 마지막 조각 🔴
-- 어댑터 병합(peft merge_and_unload) → GGUF 변환(llama.cpp convert) → `ollama create nic-planner -f Modelfile`
-- 플래너 교체: `run_stage0_batch.py --model nic-planner` → 동일 goals로 성공률 비교(진전 측정)
-- 데이터 늘리며 반복: 수집→게이트→데이터셋→학습→재투입 측정 루프
+### ① 진짜 사이클 1회 — VL 베이스 전환 + 데이터 증량 🔴
+- 베이스를 **Qwen2.5-VL-3B-Instruct**로: HF 다운로드 → 게이트 통과 데이터로 LoRA → 병합 → GGUF(**mmproj 포함**) → ollama create → 미니 배치 성공률 측정
+- 데이터 볼륨: 현재 5샘플은 형식 학습 한계 — 수집 완주(full_c0 resume + chunk1~3)와 병행해 수백 샘플 확보 후 재학습
 
 ### ② 수집 완주 + 게이트 병행 (후속)
-- full_c0 `--resume` + chunk1~3 (~15시간). 수집 후 `screen_quality.py` 일괄 심사 → gated 데이터셋 누적
-- 실패 골 2차 패스(temperature 0.3), repair_rounds 2
+- full_c0 `--resume` + chunk1~3 (~15시간). `screen_quality.py` 일괄 심사 누적
 
-### ③ svg_raster 렌더 품질 (게이트가 발견한 신호)
-- 작은 원/곡선이 별처럼 뭉개져 보임 — scanline 해상도·안티앨리어싱 개선 여지
+### ③ svg_raster 렌더 품질
+- 작은 원/곡선이 별처럼 뭉개짐(게이트 심사 근거) — scanline 해상도·AA 개선
 
 ### ④ Krita 실기 E2E 스모크
-- 브리지 경로(캔버스 렌더→VLM→액션 주입) 실기 검증 — 아직 headless만 검증됨
+- 브리지 경로 실기 검증(캔버스 렌더→VLM→액션 주입)
 
 ---
 
