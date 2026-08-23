@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=nic_agent_bridge
+X-Python-2-Compatible=false
+X-Krita-Manual=NIC Agent Bridge
+Name=NIC Agent Bridge
+Comment=Localhost action server bridging external orchestrators to live Krita documents
