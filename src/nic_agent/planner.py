@@ -10,6 +10,7 @@ from nic_agent.models import ActionValidationError
 from nic_agent.validator import validate_action_payload
 
 MAX_POINTS_PER_STROKE = 64
+EMPTY_RESPONSE_RETRIES = 2
 
 
 ACTION_SUMMARY = """\
@@ -54,6 +55,47 @@ VISION_PROMPT_ADDENDUM = (
     "\n\nA rendered image of the current canvas is attached with each observation."
     " Inspect it carefully, compare against the goal, and critique your own work before deciding actions."
 )
+
+ERROR_FIX_HINTS = {
+    "document_already_exists": (
+        "The document ALREADY exists. Never call create_document again; continue with create_layer."
+    ),
+    "unknown_parent_layer": (
+        "That parent_id does not exist. To create a TOP-LEVEL layer OMIT parent_id entirely;"
+        " use parent_id only with an existing group id from the layers list."
+    ),
+    "unknown_layer": (
+        "Unknown layer id. Use ONLY ids that appear in the layers list of the observation."
+    ),
+    "duplicate_layer_id": (
+        "That layer_id already exists. Choose a new unique layer_id."
+    ),
+    "no_active_paint_layer": (
+        'No active paint layer. Call create_layer with kind:"paint" (and select_layer if needed) first.'
+    ),
+    "active_layer_not_paintable": (
+        "The active layer is not a paint layer. Create/select a paint layer for fill_rect/stroke."
+    ),
+    "no_active_vector_layer": (
+        'No active vector layer. Call create_layer with kind:"vector" first, then retry add_svg.'
+    ),
+    "active_layer_not_vector": (
+        "The active layer is not a vector layer. Create/select a vector layer for add_svg."
+    ),
+    "no_output_root": ("Export target not ready; call export_png anyway is invalid - report via finish."),
+}
+
+
+def error_fix_hint(error: str | None) -> str | None:
+    if not error:
+        return None
+    base = error.split(":", 1)[0].strip()
+    if base in ERROR_FIX_HINTS:
+        return ERROR_FIX_HINTS[base]
+    for key, hint in ERROR_FIX_HINTS.items():
+        if key in error:
+            return hint
+    return None
 
 
 @dataclass(slots=True, frozen=True)
@@ -147,6 +189,9 @@ def render_observation(observation: Mapping[str, Any]) -> str:
     error = observation.get("error")
     if error:
         lines.append(f"LAST_ACTION_ERROR: {error}")
+        hint = error_fix_hint(str(error))
+        if hint:
+            lines.append(f"FIX: {hint}")
     return "\n".join(lines)
 
 
@@ -161,12 +206,14 @@ class LLMPolicy:
         system_prompt: str | None = None,
         image_provider: Any = None,
         suppress_thinking: bool = False,
+        image_history_limit: int | None = None,
     ) -> None:
         self.chat_client = chat_client
         self.goal = goal
         self.max_blocks = max_blocks
         self.history_turns = history_turns
         self.image_provider = image_provider
+        self.image_history_limit = image_history_limit
         resolved_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         if image_provider is not None:
             resolved_prompt += VISION_PROMPT_ADDENDUM
@@ -189,11 +236,35 @@ class LLMPolicy:
             self._request_block(observation)
         return self._pending.popleft()
 
+    def resume_with_repair(self, message: str, extra_blocks: int = 4) -> None:
+        """Continue an exhausted/finished policy with a repair hint, preserving history."""
+        self._done = False
+        self.max_blocks += extra_blocks
+        self._pending.clear()
+        self.last_feedback = []
+        self._messages.append({"role": "user", "content": message})
+
+    def conversation(self) -> list[dict[str, Any]]:
+        """Text-only copy of the full planner conversation (images elided)."""
+        return [
+            {
+                "role": message.get("role"),
+                "content": (
+                    message["content"] if isinstance(message["content"], str) else "[image]"
+                ),
+            }
+            for message in self._messages
+        ]
+
     def _request_block(self, observation: Mapping[str, Any]) -> None:
         self.blocks_used += 1
         user_content = self._render_user_content(observation)
         self._append_user_message(user_content)
         raw_text = self.chat_client.complete(self._trimmed_messages())
+        retries = 0
+        while not raw_text.strip() and retries < EMPTY_RESPONSE_RETRIES:
+            retries += 1
+            raw_text = self.chat_client.complete(self._trimmed_messages())
         plan = parse_model_response(raw_text)
         self.turns.append(plan)
         self._messages.append({"role": "assistant", "content": raw_text})
@@ -220,7 +291,15 @@ class LLMPolicy:
         self._pending.extend(accepted)
 
     def _render_user_content(self, observation: Mapping[str, Any]) -> Any:
-        parts = [f"Goal: {self.goal}", "", render_observation(observation)]
+        parts = [
+            f"Goal: {self.goal}",
+            "",
+            render_observation(observation),
+            "",
+            f"Blocks used: {self.blocks_used}/{self.max_blocks}."
+            " Budget is limited: finish drawing within a few responses,"
+            ' call export_png once the image matches the goal, then respond with {"actions": [], "done": true}.',
+        ]
         if self.last_feedback:
             parts.append("")
             parts.append("Feedback on your previous response:")
@@ -251,4 +330,29 @@ class LLMPolicy:
         keep_count = self.history_turns * 2
         keep_from = max(0, len(tail) - keep_count)
         keep_from -= keep_from % 2
-        return head + tail[keep_from:]
+        messages = head + tail[keep_from:]
+        if self.image_history_limit is not None:
+            messages = _elide_old_images(messages, self.image_history_limit)
+        return messages
+
+
+def _elide_old_images(window: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    image_positions = [
+        index
+        for index, message in enumerate(window)
+        if isinstance(message.get("content"), list)
+    ]
+    keep = set(image_positions[-limit:] if limit > 0 else [])
+    result: list[dict[str, Any]] = []
+    for index, message in enumerate(window):
+        content = message.get("content")
+        if isinstance(content, list) and index not in keep:
+            texts = [part["text"] for part in content if part.get("type") == "text"]
+            elided = "\n".join(texts).rstrip()
+            if elided:
+                elided += "\n"
+            elided += "[earlier canvas render omitted from context]"
+            result.append({"role": message.get("role"), "content": elided})
+        else:
+            result.append(message)
+    return result

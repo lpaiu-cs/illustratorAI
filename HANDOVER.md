@@ -81,30 +81,64 @@
 - **실기 배치 스모크**(3목표): 1차 1/3 성공 → resume 재실행으로 2/3. 파이프라인은 정상, **모델 변동성이 병목**(같은 스마일리 목표가 실행마다 성패 갈림)
 - **pytest 84개 통과** (`test_stage0.py` 6건 추가)
 
+### 3.7 실패 분류 → 타깃 재요청 수선 루프 (수집 성공률 개선) ✅
+- **설계**: 실패 시 블라인드 재시도 대신, 결정적 검사로 "무엇이 빠졌는지" 분류해 힌트를 얹어 **대화 이력을 보존한 채** 이어서 요청 — 처음부터 다시 하는 것보다 저렴하고 성공률도 높음
+- **`stage0.py` 추가**:
+  - `classify_failure(summary, observation)` → 결정적 유형 판정: `no_document / invalid_response / export_missing / done_missing / action_failures`
+  - `build_repair_message(classes)` → 유형별 처방 힌트 조합
+  - `ACTION_BLOCK_SCHEMA` — 액션 블록 JSON 스키마(구조화 출력용)
+- **`planner.py`**: `LLMPolicy.resume_with_repair(message, extra_blocks)` — `_done` 해제 + 블록 예산 증가 + 힌트 user 메시지 어펜드 (히스토리 유지가 핵심); `conversation()` 텍스트 덤프; `image_history_limit`(오래된 캔버스 이미지를 텍스트로 생략); 빈 응답 즉시 재시도(블록 미소모); 관찰에 `FIX:` 처방 힌트 + `Blocks used: n/N` 카운트다운 주입
+- **`chat.py`**: OllamaChatClient `format_schema` → `/v1`에 `response_format: json_schema` 전송
+- **`session_log.py`**: `log_repair()` — `kind:"repair"` 기록; 세션마다 `conversation.jsonl` 덤프(SFT 원료)
+- **CLI**: `--temperature --repair-rounds --image-history --history-turns`
+- **SFT**: `build_sft_dataset.py` — manifest의 success 세션만 대화 컨텍스트→assistant 턴 종단 샘플로 직렬화 (`--include-repair` 스위치)
+- **목표 생성기**: `make_goals.py` — 12개 카테고리 템플릿 결정론 조합 100골 (`goals_100.txt`)
+
+### 3.8 모델 A/B와 처리량 실측 ⚠️ (중요)
+| 구성 | 속도 | 성공률 |
+|---|---|---|
+| qwen3-vl:8b (원 프롬프트, repair) | ~5-9분/골 | 첫 실행 ~40-50%, resume/repair 후 상승 |
+| qwen3-vl + 카운트다운/FIX/구조화 | 비슷(~9분/골) | 비슷 |
+| qwen2.5vl:7b (모든 구성) | **12초/블록 (15배 빠름)** | **~0%** — 문맥 수정 불능(같은 실패 반복), 스키마 위반 |
+
+- **qwen3-vl 병목 확정 사실**: 호출당 이미지 인코딩 플로어 ~15초 + `/no_think`·`think:false` 모두 무시되는 숨은 reasoning 생성(수천 자) → 블록당 평균 ~50-110초. 프롬프트 축소·이미지 elision·history 축소로도 못 줄임
+- **빈 응답 원인**: reasoning이 max_tokens 예산을 태워 content가 빈 채 종료 → invalid_response 연쇄
+- **결론**: 로컬 단일 모델로 목표당 ~9분이 물리적 현실. 100골 ≈ 15시간 — 청크 resume으로 분할 실행 필요
+- **pytest 97개 통과**
+
+### 3.9 수집 진행 현황
+- `output/goals_100.txt` (100골) → chunk0~3 파일로 분할 (25골씩)
+- **full_c0: 20/25 실행, 9 성공** (manifest 누적, `--resume`로 계속)
+- **val5(chunk0의 20~24번): 5실행 2성공**
+- SFT 파이프라인 검증 완료: mini 배치 → clean 6샘플 / 전체 20샘플 추출 확인
+
 ---
 
 ## 4. 검증 결과
-- pytest **84개 통과**
+- pytest **91개 통과**
 - 실기 비전 스모크: qwen3-vl:8b가 캔버스 렌더를 보며 64×64 스마일리 완주 — 세션 내 오류 0건, `stop_reason=finish`, PNG(366B) 내보내기, 8블록
-- 배치 스모크(3목표): 1차 1/3 → resume 후 2/3 성공, 성공 판정·스킵·재실행 모두 확인
+- 배치 스모크(3목표): 수선 루프 없이 1/3 → **수선 루프 적용 시 3/3 전량 성공** (exhausted 세션이 repair 1회로 finish 회복)
 - **핵심 발견**: qwen3-vl은 thinking 모드에서 무한 추론 → `/no_think` + `format:json` + `response_format:json_object` + `max_tokens=8192`로 해결
 - SVG 단일 루트 `<g>` 그룹 강제 규칙으로 다중 요소 결합 문제 해결
-- **에이전트 관찰 설계 교훈**: 오류 턴이라도 전체 상태(layers 목록 등)를 관찰에 실어야 모델이 자기 수정 가능 — 상태 없는 오류 보고는 복구를 막는다
+- **에이전트 관찰 설계 교훈**: 오류 턴이라도 전체 상태를 관찰에 실어야 자기 수정 가능 / 실패는 유형 분류 후 타깃 재요청이 블라인드 재시도보다 우월
 
 ---
 
 ## 5. 다음 단계 (우선순위 순)
 
-### ① 수집 성공률 개선 (최우선) 🔴
-- **이유**: 배치 파이프라인은 정상이지만 모델 변동성으로 1차 성공률 ~33% (스마일리 목표조차 실행마다 성패 갈림) — 대량 수집 전에 개선 필요
-- **후보**: temperature 낮춤(0.7→0.2~0.4), 실패 시 자동 재시도 예산(k회), finish 누락 시 export_png 자동 보정 여부 검토, 프롬프트 few-shot 예시 추가
+### ① 본격 수집 완주 (청크 resume 방식) 🔴
+- **명령**(세션당 한 청크씩, ~2시간/25골):
+  `python scripts/dev/run_stage0_batch.py --goals-file output\goals_chunk1.txt --model qwen3-vl:8b --canvas 64x64 --max-blocks 8 --image-history 1 --output-root output\stage0_batch\full_c1`
+  (중단돼도 같은 명령 재실행 시 manifest 기준 이어서; full_c0은 `--resume` 붙여 계속, val5의 20~24번 성공분은 별도 manifest)
+- **예상**: 총 ~15시간 (qwen3-vl 처리량 상한)
+- **성공률 개선 여지**: 실패 골만 모아 2차 패스(temperature 0.3), repair_rounds 2
 
-### ② 본격 수집 실행
-- **준비물**: 목표 프롬프트 세트 파일(100~1000개, 카테고리별) + `run_stage0_batch.py --resume` 반복 실행
-- **산출**: manifest.jsonl에서 success=true 세션만 Stage 1 SFT 데이터셋으로 직렬화 (세션 로그 → 액션 시퀀스 + 관찰)
+### ② 속도 근본 개선 (선택)
+- thinking 억제가 확실한 비전 모델로 교체(예: qwen2.5-vl 계열 중 지능 높은 상위판, 또는 API VLM) — qwen2.5vl:7b는 15배 빠르지만 지시 추종 부족으로 탈락
+- OLLAMA_NUM_PARALLEL=2 등 서버측 병렬화 검토
 
-### ③ 벡터 SVG 고급 기능 (품질 개선)
-- **대상**: 중첩 그룹, 마스크/클리핑 패스, 그라디언트/패턴 fill — `svg_raster.py` 확장 + Krita `addShapesFromSvg` 매핑
+### ③ SFT 데이터셋 생성
+- `build_sft_dataset.py --manifest ... --manifest ... --out dataset.jsonl` (성공 세션 대상, repair 포함/제외 선택)
 
 ---
 
@@ -119,9 +153,9 @@
 ## 7. 즉시 재개 시 체크리스트
 1. `cd E:\lab\illustratorAI`
 2. `ollama ps` → `qwen3-vl:8b` 로드 확인
-3. `python -m pytest -q` → 84 passed 확인
-4. 단일 비전 스모크: `python scripts/dev/run_stage0_llm.py --goal "Draw a 64x64 smiley face: yellow circle outline, two eyes, a smiling mouth." --model qwen3-vl:8b --client ollama --canvas 64x64 --max-blocks 10 --output-dir output/test_vision`
-5. 배치 스모크: 목표 파일 준비 후 `python scripts/dev/run_stage0_batch.py --goals-file <파일> --model qwen3-vl:8b --canvas 64x64 --max-blocks 10 --output-root output/stage0_batch/<이름>` (재실행 시 `--resume`)
+3. `python -m pytest -q` → 97 passed 확인
+4. 수집 이어서: `python scripts/dev/run_stage0_batch.py --goals-file output\goals_chunk1.txt --model qwen3-vl:8b --canvas 64x64 --max-blocks 8 --image-history 1 --output-root output\stage0_batch\full_c1` (full_c0은 `--resume`)
+5. 데이터셋: `python scripts/dev/build_sft_dataset.py --manifest output\stage0_batch\full_c0\manifest.jsonl --manifest output\stage0_batch\val5\manifest.jsonl --out output\sft\dataset.jsonl`
 
 ---
 

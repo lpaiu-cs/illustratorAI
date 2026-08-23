@@ -45,6 +45,25 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, default=default_root)
     parser.add_argument("--limit", type=int, default=None, help="Only run the first N goals")
     parser.add_argument("--no-vision", action="store_true", help="Disable canvas image attachment")
+    parser.add_argument("--temperature", type=float, default=None, help="Override sampling temperature (default client value)")
+    parser.add_argument(
+        "--repair-rounds",
+        type=int,
+        default=1,
+        help="Targeted repair re-requests after a failed session (0 disables)",
+    )
+    parser.add_argument(
+        "--image-history",
+        type=int,
+        default=None,
+        help="Keep only the last N canvas images in context (older ones become text). Default: keep all",
+    )
+    parser.add_argument(
+        "--history-turns",
+        type=int,
+        default=None,
+        help="Trim conversation to the last N user/assistant turn pairs. Default: 12",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -79,6 +98,10 @@ def main() -> int:
             max_blocks=args.max_blocks,
             output_dir=output_dir,
             attach_vision=not args.no_vision,
+            temperature=args.temperature,
+            repair_rounds=args.repair_rounds,
+            image_history=args.image_history,
+            history_turns=args.history_turns,
         )
 
     manifest_path = args.output_root / "manifest.jsonl"

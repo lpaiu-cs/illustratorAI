@@ -262,6 +262,117 @@ def test_policy_appends_no_think_token_when_suppressed():
     assert client.calls[0][0]["content"] == policy.system_prompt
 
 
+def test_resume_with_repair_preserves_history_and_restores_generation():
+    client = FakeChatClient(
+        [
+            json.dumps(
+                {
+                    "thought": "draw",
+                    "actions": [
+                        {"type": "create_document", "payload": {"width": 8, "height": 8}}
+                    ],
+                    "done": False,
+                }
+            ),
+            json.dumps({"thought": "done", "actions": [], "done": True}),
+        ]
+    )
+    policy = LLMPolicy(client, goal="g", max_blocks=1)
+
+    first = policy.next_action({"step": 0})
+    assert first["type"] == "create_document"
+    assert policy.next_action({"step": 1}) is None
+
+    policy.resume_with_repair("REPAIR: declare done now", extra_blocks=2)
+    second = policy.next_action({"step": 2})
+
+    assert second == {"type": "finish"}
+    assert client.calls[-1][-2]["content"] == "REPAIR: declare done now"
+    assert "Goal: g" in str(client.calls[-1][-1]["content"])
+
+
+def test_empty_model_response_is_retried_without_consuming_blocks():
+    client = FakeChatClient(
+        [
+            "",
+            json.dumps({"actions": [{"type": "finish"}]}),
+        ]
+    )
+    policy = LLMPolicy(client, goal="g", max_blocks=5)
+    action = policy.next_action({"step": 0})
+    assert action == {"type": "finish"}
+    assert len(client.calls) == 2
+    assert policy.blocks_used == 1
+
+
+def test_empty_response_retries_are_capped_then_reported_as_parse_error():
+    client = FakeChatClient(["", "", "", json.dumps({"actions": [{"type": "finish"}]})])
+    policy = LLMPolicy(client, goal="g", max_blocks=1)
+    result = policy.next_action({"step": 0})
+    assert result is None
+    assert len(client.calls) == 3
+    assert any("not valid JSON" in item for item in policy.last_feedback)
+
+    policy.resume_with_repair("REPAIR: respond now", extra_blocks=1)
+    assert policy.next_action({"step": 1}) == {"type": "finish"}
+
+
+def test_image_history_limit_elides_older_canvas_images():
+    responses = [
+        json.dumps({"actions": [{"type": "create_document", "payload": {"width": 8, "height": 8}}], "done": False}),
+        json.dumps({"actions": [{"type": "create_layer", "payload": {"layer_id": "a", "name": "A", "kind": "paint"}}], "done": False}),
+        json.dumps({"actions": [], "done": True}),
+    ]
+    client = FakeChatClient(responses)
+    policy = LLMPolicy(
+        client,
+        goal="g",
+        max_blocks=3,
+        image_provider=lambda: "UElY",
+        image_history_limit=1,
+    )
+    while policy.next_action({"step": 0}) is not None:
+        pass
+
+    image_messages_per_call = []
+    for call in client.calls:
+        count = sum(
+            1
+            for message in call
+            if isinstance(message["content"], list)
+            and any(part.get("type") == "image_url" for part in message["content"])
+        )
+        image_messages_per_call.append(count)
+
+    assert image_messages_per_call == [1, 1, 1]
+    last_call = client.calls[-1]
+    elided = [
+        message for message in last_call
+        if isinstance(message["content"], str) and "omitted from context" in message["content"]
+    ]
+    assert len(elided) == 2
+    assert all("Goal:" in message["content"] for message in elided)
+    assert "[earlier canvas render omitted from context]" in elided[0]["content"]
+
+
+def test_image_history_none_keeps_all_images():
+    responses = [
+        json.dumps({"actions": [{"type": "create_document", "payload": {"width": 8, "height": 8}}], "done": False}),
+        json.dumps({"actions": [], "done": True}),
+    ]
+    client = FakeChatClient(responses)
+    policy = LLMPolicy(client, goal="g", max_blocks=2, image_provider=lambda: "UElY")
+    while policy.next_action({"step": 0}) is not None:
+        pass
+
+    second_call_images = sum(
+        1
+        for message in client.calls[-1]
+        if isinstance(message["content"], list)
+    )
+    assert second_call_images == 2
+
+
 def test_openai_client_max_tokens_and_json_mode():
     captured = {}
 

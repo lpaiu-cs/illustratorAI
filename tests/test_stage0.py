@@ -2,6 +2,9 @@ import json
 
 from nic_agent.stage0 import (
     build_manifest_entry,
+    build_repair_message,
+    classify_failure,
+    extract_sft_samples,
     is_collection_success,
     load_goals,
     read_manifest,
@@ -138,3 +141,87 @@ def test_run_batch_resume_skips_succeeded_and_retries_failed(tmp_path):
 
 def test_read_manifest_missing_file_returns_empty(tmp_path):
     assert read_manifest(tmp_path / "missing.jsonl") == []
+
+
+def test_classify_failure_returns_empty_for_success():
+    summary = {"ok": True, "stop_reason": "finish", "exported_png": ["a.png"], "last_feedback": []}
+    assert classify_failure(summary, {"canvas": {"width": 8, "height": 8}}) == []
+
+
+def test_classify_failure_without_canvas_is_no_document():
+    summary = {"ok": False, "stop_reason": "policy_exhausted", "exported_png": [], "last_feedback": []}
+    assert classify_failure(summary, {"canvas": None}) == ["no_document"]
+
+
+def test_classify_failure_exhausted_with_export_is_done_missing():
+    summary = {"ok": True, "stop_reason": "policy_exhausted", "exported_png": ["a.png"], "last_feedback": []}
+    assert classify_failure(summary, {"canvas": {"width": 8, "height": 8}}) == ["done_missing"]
+
+
+def test_classify_failure_without_export_is_export_missing():
+    observation = {"canvas": {"width": 8, "height": 8}}
+    finished_no_export = {"ok": True, "stop_reason": "finish", "exported_png": [], "last_feedback": []}
+    assert classify_failure(finished_no_export, observation) == ["export_missing"]
+    exhausted_no_export = {"ok": False, "stop_reason": "max_steps", "exported_png": [], "last_feedback": []}
+    assert classify_failure(exhausted_no_export, observation) == [
+        "action_failures",
+        "export_missing",
+    ]
+
+
+def test_classify_failure_flags_invalid_response_from_last_feedback():
+    summary = {
+        "ok": True,
+        "stop_reason": "policy_exhausted",
+        "exported_png": ["a.png"],
+        "last_feedback": ["previous response was not valid JSON: boom"],
+    }
+    assert classify_failure(summary, {"canvas": {"width": 8, "height": 8}}) == [
+        "invalid_response",
+        "done_missing",
+    ]
+
+
+def test_build_repair_message_lists_each_class_hint():
+    message = build_repair_message(["done_missing", "export_missing"])
+    assert "- done_missing:" in message
+    assert "- export_missing:" in message
+    assert '"done": true' in message
+
+
+def test_extract_sft_samples_pairs_contexts_with_assistant_turns():
+    conversation = [
+        {"role": "system", "content": "You are the planner."},
+        {"role": "user", "content": "Goal: draw a cat"},
+        {"role": "assistant", "content": '{"actions": [{"type": "create_document"}]}'},
+        {"role": "user", "content": "canvas: 8x8"},
+        {"role": "assistant", "content": '{"actions": [], "done": true}'},
+    ]
+    samples = extract_sft_samples(
+        conversation, {"index": 3, "goal": "draw a cat", "repair_rounds_used": 1}
+    )
+    assert len(samples) == 2
+    assert samples[0]["turn"] == 1 and samples[1]["turn"] == 2
+    assert all(sample["goal"] == "draw a cat" for sample in samples)
+    assert samples[0]["source_index"] == 3
+    assert samples[0]["used_repair"] is True
+    assert len(samples[0]["messages"]) == 3
+    assert samples[0]["messages"][-1]["role"] == "assistant"
+    assert len(samples[1]["messages"]) == 5
+
+
+def test_extract_sft_samples_elides_image_parts_via_conversation_copy():
+    from nic_agent.planner import LLMPolicy
+
+    class OneShotClient:
+        def complete(self, messages):
+            return '{"actions": [{"type": "finish"}]}'
+
+    policy = LLMPolicy(OneShotClient(), goal="g", image_provider=lambda: "UElY")
+    policy.next_action({"step": 0})
+    samples = extract_sft_samples(
+        policy.conversation(), {"index": 0, "goal": "g", "repair_rounds_used": 0}
+    )
+    contents = [message["content"] for sample in samples for message in sample["messages"]]
+    assert all(isinstance(content, str) for content in contents)
+    assert "[image]" in contents

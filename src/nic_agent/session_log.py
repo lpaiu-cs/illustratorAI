@@ -20,6 +20,9 @@ class SessionLogger:
     def log_observation(self, observation: Mapping[str, Any]) -> None:
         self._write("observation", {"observation": dict(observation)})
 
+    def log_repair(self, fields: Mapping[str, Any]) -> None:
+        self._write("repair", dict(fields))
+
     def close(self) -> None:
         self._handle.close()
 

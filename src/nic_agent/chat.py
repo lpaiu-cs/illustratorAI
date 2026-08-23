@@ -79,12 +79,14 @@ class OllamaChatClient:
         timeout: float = 300.0,
         temperature: float = 0.7,
         transport: Callable[..., Any] | None = None,
+        format_schema: dict[str, Any] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.temperature = temperature
+        self.format_schema = format_schema
         self.last_thinking: str | None = None
         self._transport = transport if transport is not None else urllib.request.urlopen
 
@@ -94,18 +96,20 @@ class OllamaChatClient:
             text, images = _split_content_parts(message.get("content"))
             entry: dict[str, Any] = {"role": message.get("role", "user"), "content": text}
             if images:
-                entry["images"] = images
+                entry["image_url"] = [{"url": f"data:image/png;base64,{img}"} for img in images]
             payload_messages.append(entry)
         payload = {
             "model": self.model,
             "messages": payload_messages,
-            "format": "json",
-            "stream": False,
-            "options": {
-                "num_predict": self.num_predict,
-                "temperature": self.temperature,
-            },
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "response_format": {"type": "json_object"},
         }
+        if self.format_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": self.format_schema,
+            }
         request = urllib.request.Request(
             f"{self.base_url}/api/chat",
             data=json.dumps(payload).encode("utf-8"),
