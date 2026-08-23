@@ -3,6 +3,7 @@ import json
 from nic_agent.stage0 import (
     build_manifest_entry,
     build_repair_message,
+    build_sft_training_pair,
     classify_failure,
     extract_sft_samples,
     is_collection_success,
@@ -301,3 +302,42 @@ def test_load_quality_passes_filters_by_match_and_score(tmp_path):
 
 def test_load_quality_passes_missing_file_returns_empty(tmp_path):
     assert load_quality_passes([tmp_path / "missing.jsonl"], min_score=6) == {}
+
+
+class FakeTokenizer:
+    """Chat template where each message contributes one token id (100+index)."""
+
+    def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=False):
+        ids = [100 + index for index, _ in enumerate(messages)]
+        if add_generation_prompt:
+            ids.append(999)
+        return ids
+
+
+def test_build_sft_training_pair_masks_everything_but_final_assistant():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": '{"actions": []}'},
+    ]
+    pair = build_sft_training_pair(FakeTokenizer(), messages)
+    assert pair["input_ids"] == [100, 101, 102]
+    assert pair["labels"] == [-100, -100, 102]
+
+
+def test_build_sft_training_pair_left_truncates_keeping_targets():
+    messages = [
+        {"role": "user", "content": f"turn {i}"} for i in range(5)
+    ] + [{"role": "assistant", "content": "reply"}]
+    pair = build_sft_training_pair(FakeTokenizer(), messages, max_len=3)
+    assert pair["input_ids"] == [103, 104, 105]
+    assert pair["labels"] == [-100, -100, 105]
+
+
+def test_build_sft_training_pair_requires_assistant_tail():
+    try:
+        build_sft_training_pair(FakeTokenizer(), [{"role": "user", "content": "x"}])
+    except ValueError as exc:
+        assert "assistant" in str(exc)
+        return
+    raise AssertionError("expected ValueError")

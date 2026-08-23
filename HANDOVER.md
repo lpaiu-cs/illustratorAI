@@ -127,9 +127,14 @@
 - 참고: samples.html 브라우저 컨택트시트(`output/sft/samples.html`)
 - **pytest 102개 통과**
 
-### 3.11 Stage 1 학습 계층 (미착수) ⬜
-- 환경에 torch/transformers/peft **미설치** — 설치 필요(torch cu12x ~2.5GB + transformers/peft/datasets)
-- 스키마: `dataset_v2*.jsonl`(goal + messages 체인, assistant 종단) → LoRA SFT → 체크포인트 → 플래너 재투입 → 동일 목표 배치로 성공률 비교(진전 측정)
+### 3.11 Stage 1 학습 계층 구축 ✅ (구조 완성, 스모크 검증)
+- **설치 완료**: torch 2.11.0+cu128(RTX 5090 CUDA 인식) + transformers 5.15 + peft 0.20 + datasets — `requirements-train.txt`
+- **`stage0.build_sft_training_pair`**: 대화 샘플 → 토큰화 + assistant 종단 턴만 loss(템플릿 불관요 common-prefix 마스킹, 좌측 절단 시 타깃 보존). transformers 5.x의 dict 반환 등 이슈 정규화
+- **`train_sft.py`**: dataset jsonl 소비 → LoRA SFT(q/k/v/o+gate/up/down, r=16) → 어댑터 저장; `--prepare-only`로 데이터 파이프라인만 검증 가능
+- **실학습 스모크 성공**: Qwen2.5-0.5B-Instruct + gated 데이터셋 5샘플 → 4 epoch loss 0.73→0.14 수렴, 어댑터 저장(`output/sft/lora_smoke`)
+- **남은 것(재투입 경로)**: 어댑터→병합→GGUF 변환→`ollama create` 또는 vLLM 서버 → 플래너 `--base-url/--model` 교체 → 동일 goals 배치 재실행으로 성공률 비교
+- 참고: 현재 conversation 덤프는 이미지가 `[image]` 생략된 텍스트 체인 — Stage 1a는 텍스트 모방 학습. 이미지 조건부 학습은 덤프에 렌더 포함 후 확장
+- **pytest 105개 통과**
 
 ---
 
@@ -145,10 +150,10 @@
 
 ## 5. 다음 단계 (우선순위 순)
 
-### ① Stage 1 학습 계층 구축 (최우선) 🔴
-- **설치**: torch(cu12x)+transformers+peft+datasets — `requirements-train.txt`로 분리 권장
-- **구성**: `train_sft.py`(dataset_v2 소비, LoRA SFT, assistant 턴만 loss) → 초소형 오버피팅 테스트 → 체크포인트
-- **재투입 경로**: 체크포인트→GGUF 변환→ollama create 또는 vLLM 서버 → `--base-url`로 플래너 교체 → 동일 goals 배치 재실행해 성공률 비교
+### ① 재투입 경로 완성 — 구조 순환의 마지막 조각 🔴
+- 어댑터 병합(peft merge_and_unload) → GGUF 변환(llama.cpp convert) → `ollama create nic-planner -f Modelfile`
+- 플래너 교체: `run_stage0_batch.py --model nic-planner` → 동일 goals로 성공률 비교(진전 측정)
+- 데이터 늘리며 반복: 수집→게이트→데이터셋→학습→재투입 측정 루프
 
 ### ② 수집 완주 + 게이트 병행 (후속)
 - full_c0 `--resume` + chunk1~3 (~15시간). 수집 후 `screen_quality.py` 일괄 심사 → gated 데이터셋 누적

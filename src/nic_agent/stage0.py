@@ -309,3 +309,37 @@ def parse_judgement(text: str) -> dict[str, Any] | None:
         "missing": parsed.get("missing") if isinstance(parsed.get("missing"), list) else [],
         "reasoning": str(parsed.get("reasoning", "")),
     }
+
+
+def _template_token_ids(tokenizer: Any, messages: list[dict[str, Any]], add_generation_prompt: bool) -> list[int]:
+    rendered = tokenizer.apply_chat_template(
+        messages, tokenize=True, add_generation_prompt=add_generation_prompt
+    )
+    if hasattr(rendered, "keys") and "input_ids" in rendered:
+        rendered = rendered["input_ids"]
+    elif hasattr(rendered, "input_ids"):
+        rendered = rendered.input_ids
+    if rendered and isinstance(rendered[0], (list, tuple)):
+        rendered = rendered[0]
+    return [int(token) for token in rendered]
+
+
+def build_sft_training_pair(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    max_len: int = 2048,
+) -> dict[str, list[int]]:
+    """Tokenize one conversation sample with loss only on the final assistant turn."""
+    if not messages or messages[-1].get("role") != "assistant":
+        raise ValueError("sample must end with an assistant message")
+    prompt_ids = _template_token_ids(tokenizer, messages[:-1], add_generation_prompt=True)
+    full_ids = _template_token_ids(tokenizer, messages, add_generation_prompt=False)
+    common = 0
+    limit = min(len(prompt_ids), len(full_ids))
+    while common < limit and prompt_ids[common] == full_ids[common]:
+        common += 1
+    drop = max(0, len(full_ids) - max_len)
+    input_ids = full_ids[drop:]
+    kept_common = max(0, common - drop)
+    labels = [-100] * kept_common + input_ids[kept_common:]
+    return {"input_ids": input_ids, "labels": labels}
