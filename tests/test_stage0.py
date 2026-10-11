@@ -88,7 +88,7 @@ def test_run_batch_runs_all_and_writes_manifest(tmp_path):
     assert calls == [(0, "goal a"), (1, "goal b"), (2, "goal c")]
     assert [entry["index"] for entry in entries] == [0, 1, 2]
     assert entries[1]["success"] is False
-    assert summarize_batch(entries) == {"total": 3, "succeeded": 2, "failed": 1}
+    assert summarize_batch(entries) == {"total": 3, "succeeded": 2, "failed": 1, "attempts": 3}
     raw_lines = manifest.read_text(encoding="utf-8").strip().splitlines()
     assert json.loads(raw_lines[0])["goal"] == "goal a"
 
@@ -141,7 +141,39 @@ def test_run_batch_resume_skips_succeeded_and_retries_failed(tmp_path):
     assert any("skip" in line for line in logs)
     assert len(entries) == 3
     assert [entry["success"] for entry in entries] == [True, False, True]
-    assert summarize_batch(entries)["succeeded"] == 2
+    # Goal-level: the retried failure no longer counts; the retry is an extra attempt.
+    assert summarize_batch(entries) == {"total": 2, "succeeded": 2, "failed": 0, "attempts": 3}
+
+
+def test_run_single_session_ignores_png_left_by_earlier_attempt(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from nic_agent.chat import OllamaChatClient
+    from nic_agent.stage0 import is_collection_success
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts" / "dev"))
+    from run_stage0_llm import run_single_session
+
+    output_dir = tmp_path / "goal_0000"
+    output_dir.mkdir()
+    (output_dir / "stale.png").write_bytes(b"from a previous attempt")
+    # This attempt finishes without ever calling export_png.
+    reply = json.dumps(
+        {
+            "thought": "t",
+            "actions": [{"type": "create_document", "payload": {"width": 8, "height": 8}}],
+            "done": True,
+        }
+    )
+    monkeypatch.setattr(OllamaChatClient, "complete", lambda self, messages: reply)
+
+    summary = run_single_session(
+        "Draw a dot", model="fake", width=8, height=8, output_dir=output_dir, repair_rounds=0
+    )
+
+    assert summary["stop_reason"] == "finish"
+    assert summary["exported_png"] == []
+    assert not is_collection_success(summary)
 
 
 def test_read_manifest_missing_file_returns_empty(tmp_path):

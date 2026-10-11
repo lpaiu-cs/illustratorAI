@@ -151,6 +151,11 @@ def run_single_session(
     )
     log_path = output_dir / "session.jsonl"
 
+    def session_exports() -> list[str]:
+        # Only this session's exports count: a reused output_dir (e.g. a --resume
+        # retry) may still hold PNGs from an earlier attempt.
+        return sorted(set(executor.backend.exported))
+
     total_steps = 0
     repairs: list[dict] = []
     failure_classes: list[str] = []
@@ -161,7 +166,7 @@ def run_single_session(
             current = {
                 "ok": loop_summary.ok,
                 "stop_reason": loop_summary.stop_reason,
-                "exported_png": sorted(path.name for path in output_dir.glob("*.png")),
+                "exported_png": session_exports(),
                 "last_feedback": list(policy.last_feedback),
             }
             observation = executor.observe()
@@ -177,7 +182,7 @@ def run_single_session(
             total_steps += loop_summary.steps
             repairs.append({"round": round_index + 1, "failure_classes": list(classes)})
 
-    exported = sorted(path.name for path in output_dir.glob("*.png"))
+    exported = session_exports()
     failure_classes = classify_failure(
         {
             "ok": loop_summary.ok,

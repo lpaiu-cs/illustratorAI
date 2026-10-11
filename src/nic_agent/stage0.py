@@ -188,10 +188,18 @@ def run_batch(
 
 
 def summarize_batch(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Goal-level totals over an append-only manifest.
+
+    A goal counts as succeeded once any attempt succeeded (the rule --resume
+    uses to skip it); retries are reported separately as ``attempts``.
+    """
+    goals = {entry["index"] for entry in entries}
+    succeeded = {entry["index"] for entry in entries if entry["success"]}
     return {
-        "total": len(entries),
-        "succeeded": sum(1 for entry in entries if entry["success"]),
-        "failed": sum(1 for entry in entries if not entry["success"]),
+        "total": len(goals),
+        "succeeded": len(succeeded),
+        "failed": len(goals - succeeded),
+        "attempts": len(entries),
     }
 
 

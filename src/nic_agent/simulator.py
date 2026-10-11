@@ -106,22 +106,24 @@ class HeadlessDocument:
             else:
                 roots.append(layer)
 
-        def paint(layer: SimLayerNode, visible_mult: bool, opacity_mult: float) -> None:
-            effective_visible = layer.visible and visible_mult
-            effective_opacity = layer.opacity * opacity_mult
-            if not effective_visible or effective_opacity <= 0.0:
+        def paint(target: bytearray, layer: SimLayerNode) -> None:
+            if not layer.visible or layer.opacity <= 0.0:
                 return
-            if layer.kind != "group":
-                self._blend_buffer(out, layer, effective_opacity)
-            for child in children.get(layer.layer_id, ()):
-                paint(child, effective_visible, effective_opacity)
+            if layer.kind == "group":
+                # Krita groups are isolated: children composite into a transparent
+                # buffer first, then the group's opacity applies once to the result.
+                source = bytearray(len(target))
+                for child in children.get(layer.layer_id, ()):
+                    paint(source, child)
+            else:
+                source = layer.buffer
+            self._blend_buffer(target, source, layer.opacity)
 
         for root_layer in roots:
-            paint(root_layer, True, 1.0)
+            paint(out, root_layer)
         return bytes(out)
 
-    def _blend_buffer(self, out: bytearray, layer: SimLayerNode, alpha_scale: float) -> None:
-        buffer = layer.buffer
+    def _blend_buffer(self, out: bytearray, buffer: bytes | bytearray, alpha_scale: float) -> None:
         for offset in range(0, len(out), 4):
             src_alpha = buffer[offset + 3]
             if src_alpha == 0:

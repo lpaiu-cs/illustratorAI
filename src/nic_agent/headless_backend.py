@@ -20,6 +20,7 @@ class HeadlessBackend:
         self.output_root = output_root
         self.document: HeadlessDocument | None = None
         self.warnings: list[str] = []
+        self.exported: list[str] = []  # file names this backend wrote, not whatever sits in output_root
 
     def has_document(self) -> bool:
         return self.document is not None
@@ -125,6 +126,7 @@ class HeadlessBackend:
         target = self.output_root / str(body["file_name"])
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(png)
+        self.exported.append(str(body["file_name"]))
 
     def observe(self) -> dict[str, Any]:
         if self.document is None:

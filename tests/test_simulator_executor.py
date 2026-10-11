@@ -170,6 +170,29 @@ def test_group_visibility_cascades_to_children():
     assert child_entry["parent_id"] == "art"
 
 
+def test_group_opacity_applies_once_to_composited_children():
+    executor = build_executor_with_canvas()
+    executor.apply(
+        {"type": "create_layer", "payload": {"layer_id": "art", "name": "Art", "kind": "group"}}
+    )
+    for layer_id, color in (("under", "#FF0000"), ("over", "#0000FF")):
+        executor.apply(
+            {
+                "type": "create_layer",
+                "payload": {"layer_id": layer_id, "name": layer_id, "kind": "paint", "parent_id": "art"},
+            }
+        )
+        executor.apply(
+            {"type": "fill_rect", "payload": {"x": 4, "y": 4, "width": 8, "height": 8, "color": color}}
+        )
+    executor.apply(
+        {"type": "set_layer_properties", "payload": {"layer_id": "art", "opacity": 0.5}}
+    )
+    # Isolated group: the opaque blue child fully covers red inside the group,
+    # then the whole group is 50% — no red bleeds through the overlap.
+    assert composite_pixel(executor, 6, 6) == (0, 0, 255, 128)
+
+
 def test_observation_surfaces_unsupported_svg_features():
     executor = build_executor_with_canvas()
     executor.apply(
