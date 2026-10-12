@@ -158,6 +158,22 @@ def test_rgb_colors_are_opaque_and_rgba_alpha_is_parsed():
     assert _parse_color("rgba(0,0,0,.5)") == (0, 0, 0, 128)
 
 
+def test_open_path_fill_is_implicitly_closed_but_stroke_is_not():
+    for d in ("M4 4 L24 4 L14 24", "M4 4 L24 4 L14 24 Z"):
+        node = make_node()
+        render_shapes_on_node(node, parse_svg(SVG_NS.format(f'<path d="{d}" fill="#FF0000"/>')))
+        assert pixel(node, 14, 10) == (255, 0, 0, 255)
+
+    def closing_edge_alpha(d):  # (9, 14) lies on the 14,24 -> 4,4 edge only Z draws
+        node = make_node()
+        svg = f'<path d="{d}" fill="none" stroke="#000000"/>'
+        render_shapes_on_node(node, parse_svg(SVG_NS.format(svg)))
+        return pixel(node, 9, 14)[3]
+
+    assert closing_edge_alpha("M4 4 L24 4 L14 24") == 0
+    assert closing_edge_alpha("M4 4 L24 4 L14 24 Z") > 0
+
+
 def test_group_fill_inheritance():
     content = parse_svg(
         SVG_NS.format(

@@ -83,11 +83,11 @@ def _walk_element(element, style, shapes, unsupported) -> None:
         except ValueError as exc:
             unsupported.append(f"path:{exc}")
             return
-        fill = resolve_fill(child_style, closed=True)
         stroke = resolve_stroke(child_style)
         width = max(0.5, float(child_style["width"]))
         for points, closed in subpaths:
-            shapes.append(SvgShape(tuple(points), closed, stroke, fill if closed else None, width))
+            fill = resolve_fill(child_style, closed)
+            shapes.append(SvgShape(tuple(points), closed, stroke, fill, width))
         return
     unsupported.append(tag)
 
@@ -401,7 +401,9 @@ def render_shapes_on_node(node, content: SvgContent) -> tuple[int, int, int, int
 
     # SVG paint order: each shape's fill then its stroke, before the next shape.
     for shape in content.shapes:
-        if shape.fill is not None and shape.closed:
+        # SVG fills open subpaths/polylines as if closed; `closed` only affects the
+        # stroke. Fewer than 3 points enclose no area.
+        if shape.fill is not None and len(shape.points) >= 3:
             scaled_points = [
                 ((x - left) * scale, (y - top) * scale) for x, y in shape.points
             ]
