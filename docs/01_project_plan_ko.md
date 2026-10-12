@@ -1,5 +1,7 @@
 # Krita Native Illustration Compiler v0 프로젝트 계획
 
+> **2026-08 갱신**: 프로젝트 방향이 에이전틱 드로잉으로 전환되었다. 본 문서는 v0 일괄 컴파일러의 기록으로 남기며, 새 방향은 `08_agent_redesign_ko.md`와 `09_difficulties_and_learning_roadmap_ko.md`를 따른다.
+
 ## 1. 목적
 
 이번 버전의 목표는 에이전트형 드로잉 시스템이 아니라, 구조화된 IR(JSON)을 받아 Krita 네이티브 `.kra` 문서를 생성하는 결정론적 컴파일러를 만드는 것이다. 결과물은 사람 일러스트레이터가 Krita에서 다시 열어 레이어, 그룹, 벡터, 일부 마스크 구조를 유지한 채 후편집할 수 있어야 한다.

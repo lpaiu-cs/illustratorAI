@@ -1,0 +1,8 @@
+--index-url https://download.pytorch.org/whl/cu128
+--extra-index-url https://pypi.org/simple
+torch>=2.7.0
+transformers>=4.51.0
+peft>=0.15.0
+datasets>=3.0.0
+accelerate>=1.6.0
+pillow>=11.0.0
