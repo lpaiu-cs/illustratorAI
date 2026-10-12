@@ -286,7 +286,10 @@ def _parse_color(value):
             channels = [
                 max(0, min(255, round(channel))) for channel in numbers[:3]
             ] + [255]
-            alpha_match = re.search(r"[/,\s]+(\d*\.?\d+)\s*\)?$", rgb_match.group(1))
+            # Only a 4th component is alpha; rgb(r, g, b) stays opaque.
+            alpha_match = len(numbers) >= 4 and re.search(
+                r"[/,\s]+(\d*\.?\d+)\s*\)?$", rgb_match.group(1)
+            )
             if alpha_match:
                 alpha_value = float(alpha_match.group(1))
                 channels[3] = round(alpha_value * 255 if alpha_value <= 1 else alpha_value)

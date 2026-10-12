@@ -92,6 +92,23 @@ def test_too_many_consecutive_failures_stops_loop(tmp_path):
     assert not summary.ok and summary.stop_reason == "too_many_failures"
 
 
+def test_rerun_starts_from_current_document_state(tmp_path):
+    # Repair rounds call AgentLoop.run again on the same executor: the first
+    # observation must show the existing document, not a blank session.
+    executor, _, _ = run_session(tmp_path, DEMO_ACTIONS[:2])
+    seen = []
+
+    class RecordingPolicy:
+        def next_action(self, observation):
+            seen.append(dict(observation))
+            return None
+
+    with SessionLogger(tmp_path / "repair.jsonl") as logger:
+        AgentLoop(executor, logger).run(RecordingPolicy())
+    assert seen[0]["canvas"] == {"width": 32, "height": 32}
+    assert [layer["id"] for layer in seen[0]["layers"]] == ["base"]
+
+
 def test_error_observations_include_full_state(tmp_path):
     actions = [
         {"type": "create_document", "payload": {"width": 16, "height": 16}},

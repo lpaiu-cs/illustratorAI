@@ -32,7 +32,12 @@ class AgentLoop:
 
     def run(self, policy: Policy) -> SessionSummary:
         self.logger.log_meta(protocol_version=ACTION_SCHEMA_VERSION, max_steps=self.max_steps)
-        observation: Mapping[str, Any] = {"step": 0, "note": "session_start"}
+        # Start from the real state: repair rounds re-enter with the document already built.
+        observation: Mapping[str, Any] = {
+            "step": 0,
+            "note": "session_start",
+            **self.executor.observe(),
+        }
         consecutive_failures = 0
         steps = 0
         while steps < self.max_steps:

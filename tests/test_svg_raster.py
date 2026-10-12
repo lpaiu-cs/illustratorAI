@@ -149,6 +149,15 @@ def test_later_shape_covers_earlier_shape_stroke():
     assert pixel(node, 8, 12) == (0, 0, 255, 255)
 
 
+def test_rgb_colors_are_opaque_and_rgba_alpha_is_parsed():
+    from nic_agent.svg_raster import _parse_color
+
+    assert _parse_color("rgb(255,0,0)") == (255, 0, 0, 255)
+    assert _parse_color("rgb(0, 128, 0)") == (0, 128, 0, 255)
+    assert _parse_color("rgba(255,0,0,0.5)") == (255, 0, 0, 128)
+    assert _parse_color("rgba(0,0,0,.5)") == (0, 0, 0, 128)
+
+
 def test_group_fill_inheritance():
     content = parse_svg(
         SVG_NS.format(
