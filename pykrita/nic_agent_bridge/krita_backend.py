@@ -181,17 +181,7 @@ class KritaBackend:
         document = self._require_document()
         if self.output_root is None:
             raise RuntimeError("no_output_root")
-        target = Path(self.output_root) / str(body["file_name"])
-        target.parent.mkdir(parents=True, exist_ok=True)
-        self.session.wait_for_done(document)
-        try:
-            exported = bool(document.exportImage(str(target)))
-        except TypeError:
-            exported = bool(
-                document.exportImage(str(target), 0, 0, document.width(), document.height())
-            )
-        if not exported:
-            raise RuntimeError(f"exportImage failed for {target}")
+        self.session.export_document(document, Path(self.output_root) / str(body["file_name"]))
 
     def observe(self) -> dict[str, Any]:
         changed = self._dirty.take()
@@ -220,19 +210,12 @@ class KritaBackend:
         import base64 as _base64
         import tempfile
 
-        self.session.wait_for_done(document)
         handle = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         handle.close()
         try:
             try:
-                exported = bool(document.exportImage(handle.name))
-            except TypeError:
-                exported = bool(
-                    document.exportImage(
-                        handle.name, 0, 0, document.width(), document.height()
-                    )
-                )
-            if not exported:
+                self.session.export_document(document, Path(handle.name))
+            except RuntimeError:  # export failed: no canvas image this turn
                 return None
             return _base64.b64encode(Path(handle.name).read_bytes()).decode("ascii")
         finally:

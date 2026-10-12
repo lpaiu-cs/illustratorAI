@@ -396,6 +396,7 @@ def render_shapes_on_node(node, content: SvgContent) -> tuple[int, int, int, int
         radius_int = max(1, int(math.ceil(size / 2.0)))
         _stamp_circle(canvas, super_width, super_height, ix, iy, radius_int, rgba)
 
+    # SVG paint order: each shape's fill then its stroke, before the next shape.
     for shape in content.shapes:
         if shape.fill is not None and shape.closed:
             scaled_points = [
@@ -403,10 +404,11 @@ def render_shapes_on_node(node, content: SvgContent) -> tuple[int, int, int, int
             ]
             for y, span_start, span_end in _polygon_spans(scaled_points):
                 row = int(y)
+                if not 0 <= row < super_height:  # shape extends past the canvas edge
+                    continue
                 for x in range(max(span_start, 0), min(span_end + 1, super_width)):
                     offset = (row * super_width + x) * 4
                     _alpha_over(canvas, offset, shape.fill)
-    for shape in content.shapes:
         if shape.stroke is None:
             continue
         outline = list(shape.points)
@@ -440,31 +442,33 @@ def _downsample_onto_node(node, canvas, super_width, left, top, width, height, s
     region = bytearray(node.pixelData(left, top, width, height))
     if len(region) != width * height * 4:
         region = bytearray(width * height * 4)
-    area = scale * scale
+    denom = scale * scale * 255.0
     for row in range(height):
         for column in range(width):
             total_alpha = 0
-            total_r = total_g = total_b = 0
+            totals = [0, 0, 0]
             for sub_y in range(scale):
                 base = ((row * scale + sub_y) * super_width + column * scale) * 4
                 for sub_x in range(scale):
                     offset = base + sub_x * 4
                     alpha = canvas[offset + 3]
                     total_alpha += alpha
-                    total_r += canvas[offset] * alpha
-                    total_g += canvas[offset + 1] * alpha
-                    total_b += canvas[offset + 2] * alpha
-            avg_alpha = total_alpha // area
-            keep = 255 - avg_alpha
+                    for channel in range(3):
+                        totals[channel] += canvas[offset + channel] * alpha
+            src_alpha = total_alpha / denom
+            if src_alpha <= 0.0:
+                continue
+            # The averaged supersamples are premultiplied; composite them over the
+            # straight-alpha pixel and store straight alpha, like _alpha_over does.
             offset = (row * width + column) * 4
-            bg_alpha = region[offset + 3]
-            denom = area * 255
-            for channel, total_color in enumerate((total_r, total_g, total_b)):
-                premult = (total_color + denom // 2) // denom
+            keep = region[offset + 3] / 255.0 * (1.0 - src_alpha)
+            out_alpha = src_alpha + keep
+            for channel in range(3):
+                premult = totals[channel] / denom
                 region[offset + channel] = min(
-                    255, premult + region[offset + channel] * keep // 255
+                    255, round((premult + region[offset + channel] * keep) / out_alpha)
                 )
-            region[offset + 3] = min(255, avg_alpha + bg_alpha * keep // 255)
+            region[offset + 3] = round(out_alpha * 255.0)
     node.setPixelData(bytes(region), left, top, width, height)
 
 

@@ -106,6 +106,49 @@ def test_relative_path_commands_match_absolute_geometry():
     assert box_a == box_b
 
 
+def test_fill_crossing_canvas_edges_is_clipped():
+    content = parse_svg(
+        SVG_NS.format(
+            '<rect x="2" y="12" width="10" height="8" fill="#FF0000"/>'
+            '<rect x="2" y="-4" width="10" height="8" fill="#00FF00"/>'
+        )
+    )
+    node = make_node(16)
+    render_shapes_on_node(node, content)  # must not index past the supersample buffer
+    assert pixel(node, 5, 14) == (255, 0, 0, 255)
+    assert pixel(node, 5, 2) == (0, 255, 0, 255)
+    # Rows above the canvas must not wrap around into other rows.
+    assert pixel(node, 5, 6) == (0, 0, 0, 0)
+
+
+def test_partial_coverage_is_stored_as_straight_alpha():
+    # x 4..8.25 covers half of pixel column 8 (2 of 4 supersamples).
+    svg = SVG_NS.format('<rect x="4" y="4" width="4.25" height="4" fill="#FF0000" stroke="none"/>')
+    node = make_node()
+    render_shapes_on_node(node, parse_svg(svg))
+    assert pixel(node, 8, 5) == (255, 0, 0, 128)
+
+    # Over a semi-transparent blue pixel: straight-alpha "over" of red at 50%.
+    node = make_node()
+    offset = (5 * node.width + 8) * 4
+    node.buffer[offset : offset + 4] = bytes((255, 0, 0, 128))  # BGRA blue, alpha 128
+    render_shapes_on_node(node, parse_svg(svg))
+    red, green, blue, alpha = pixel(node, 8, 5)
+    assert abs(red - 170) <= 1 and green == 0 and abs(blue - 85) <= 1 and abs(alpha - 192) <= 1
+
+
+def test_later_shape_covers_earlier_shape_stroke():
+    content = parse_svg(
+        SVG_NS.format(
+            '<rect x="8" y="8" width="8" height="8" fill="none" stroke="#FF0000" stroke-width="2"/>'
+            '<rect x="4" y="4" width="16" height="16" fill="#0000FF" stroke="none"/>'
+        )
+    )
+    node = make_node()
+    render_shapes_on_node(node, content)
+    assert pixel(node, 8, 12) == (0, 0, 255, 255)
+
+
 def test_group_fill_inheritance():
     content = parse_svg(
         SVG_NS.format(
